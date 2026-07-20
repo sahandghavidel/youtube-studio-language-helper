@@ -381,6 +381,11 @@
     }
     if (/published|processing/i.test(state)) {
       closeLanguageDialog(dialog);
+      const pageRow = findRow(language);
+      const pageState = pageRow ? componentCellState(pageRow, "audio") : "";
+      if (/processing/i.test(pageState)) {
+        await waitForFinalAudioPublished(language, () => {});
+      }
       return { outcome: "skipped", message: `Existing audio is already ${/published/i.test(state) ? "Published" : "Processing"}; no upload was attempted.` };
     }
     if (/draft/i.test(state) && !/^audio\s+add$/i.test(state)) {
@@ -515,20 +520,12 @@
       await waitForStableEnabled(publish, "audio-publish-stable");
       reportProgress({ phase: "youtube-audio-upload", message: `${language}: audio upload finished; publishing the uploaded track…` });
       click(publish);
-      const verified = await waitFor(() => {
-        const details = currentLanguageDialog(language);
-        const detailRow = details ? mediaRow(details, "Audio") : null;
-        const detailState = normalizedText(detailRow);
-        if (/published|processing/i.test(detailState)) return { row: detailRow, state: detailState };
-
-        const pageRow = findRow(language);
-        const pageState = pageRow ? componentCellState(pageRow, "audio") : "";
-        return /published|processing/i.test(pageState) ? { row: pageRow, state: pageState } : null;
-      }, { operation: "verify-audio-upload", timeout: TIMEOUTS.audioUpload });
+      reportProgress({ phase: "youtube-audio-processing", message: `${language}: upload accepted; waiting for Studio Audio status to become Published…` });
+      const verified = await waitForFinalAudioPublished(language, reportProgress);
       await pause(STUDIO_SETTLE_MS);
       return {
         outcome: "complete",
-        message: `Audio uploaded and accepted by Studio (${/published/i.test(verified.state) ? "Published" : "Processing"}).`
+        message: `Audio uploaded and fully processed by Studio (${verified.state}).`
       };
     }
 
@@ -577,6 +574,23 @@
     observer.observe(dialog, { childList: true, subtree: true, attributes: true, characterData: true });
     report();
     return () => observer.disconnect();
+  }
+
+  function waitForFinalAudioPublished(language, reportProgress) {
+    let lastState = null;
+    return waitFor(() => {
+      const row = findRow(language);
+      const state = row ? componentCellState(row, "audio") : "";
+      if (state && state !== lastState) {
+        lastState = state;
+        reportProgress({
+          phase: "youtube-audio-processing",
+          message: `${language}: Studio Audio status — ${state}`,
+          percentage: state.match(/\b(?:100|\d{1,2})%\b/)?.[0] || null
+        });
+      }
+      return /published/i.test(state) && !/processing/i.test(state) ? { row, state } : null;
+    }, { operation: "verify-audio-fully-published", timeout: TIMEOUTS.audioUpload });
   }
 
   chrome.runtime.onConnect.addListener((port) => {
