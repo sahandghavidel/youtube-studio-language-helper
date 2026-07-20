@@ -520,7 +520,35 @@
       await waitForStableEnabled(publish, "audio-publish-stable");
       reportProgress({ phase: "youtube-audio-upload", message: `${language}: audio upload finished; publishing the uploaded track…` });
       click(publish);
-      reportProgress({ phase: "youtube-audio-processing", message: `${language}: waiting for Studio to confirm the audio transfer with a percentage or Published status…` });
+      await waitFor(() => !visible(dialog), {
+        operation: "verify-audio-publish-dialog-closed",
+        timeout: TIMEOUTS.audioUpload
+      });
+
+      const details = await waitFor(() => currentLanguageDialog(language), {
+        operation: "return-to-language-details-after-audio",
+        timeout: TIMEOUTS.normal
+      });
+      await waitFor(() => {
+        const audioRow = mediaRow(details, "Audio");
+        const state = normalizedText(audioRow);
+        return /uploaded|published|processing/i.test(state) ? audioRow : null;
+      }, { operation: "verify-audio-present-before-update", root: details, timeout: TIMEOUTS.audioUpload });
+      const update = await waitFor(() => {
+        const matches = buttonsNamed("Update", details)
+          .filter((button) => !button.hasAttribute("disabled") && button.getAttribute("aria-disabled") !== "true");
+        return matches.length === 1 ? matches[0] : null;
+      }, { operation: "audio-language-update-ready", root: details, timeout: TIMEOUTS.audioUpload });
+      await waitForStableEnabled(update, "audio-language-update-stable");
+      reportProgress({ phase: "youtube-audio-processing", message: `${language}: saving the uploaded audio in language details…` });
+      click(update);
+      await waitFor(() => !languageDialogVisible(details), {
+        operation: "verify-audio-language-update",
+        timeout: TIMEOUTS.audioUpload
+      });
+      await pause(STUDIO_SETTLE_MS);
+
+      reportProgress({ phase: "youtube-audio-processing", message: `${language}: waiting for the main Audio column to show a percentage or Published…` });
       const verified = await waitForAudioTransferConfirmed(language, reportProgress);
       await pause(STUDIO_SETTLE_MS);
       return {
@@ -585,9 +613,12 @@
       const state = row ? componentCellState(row, "audio") : "";
       if (state && state !== lastState) {
         lastState = state;
+        const waitingForMainStatus = state === "–" || state === "-";
         reportProgress({
           phase: "youtube-audio-processing",
-          message: `${language}: Studio Audio status — ${state}`,
+          message: waitingForMainStatus
+            ? `${language}: waiting for the main Languages table Audio column to show a processing percentage or Published…`
+            : `${language}: main Languages table Audio status — ${state}`,
           percentage: state.match(/\b\d{1,3}%/)?.[0] || null
         });
       }
