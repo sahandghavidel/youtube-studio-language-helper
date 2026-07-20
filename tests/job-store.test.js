@@ -21,6 +21,24 @@ test("resume selects the first incomplete component, not completed work", () => 
   setComponentResult(job, "French::French", "subtitle", { status: COMPONENT_STATUS.COMPLETE });
   const next = nextIncompleteWork(job);
   assert.equal(next.component, "audio");
+  assert.equal(job.targets[0].components.audio.phase, "waiting");
+});
+
+test("component phases persist independently for resumable UI checkpoints", () => {
+  const source = record("French");
+  const job = createJob({
+    page: { videoId: "video", channelId: "channel", videoTitle: "Title" },
+    folderName: "Folder",
+    records: [source],
+    targets: [{ id: "French::French", sourceLanguage: "French", targetLanguage: "French", selected: true }]
+  });
+  setComponentResult(job, "French::French", "audio", {
+    status: COMPONENT_STATUS.WORKING,
+    phase: "audio-waiting-popup-published",
+    message: "Waiting for popup confirmation."
+  });
+  assert.equal(job.targets[0].components.audio.phase, "audio-waiting-popup-published");
+  assert.equal(job.targets[0].components.audio.message, "Waiting for popup confirmation.");
 });
 
 test("blocked components are terminal and do not prevent later work", () => {

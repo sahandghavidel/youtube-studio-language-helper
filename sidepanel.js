@@ -253,6 +253,7 @@ async function restoreJob() {
       for (const component of COMPONENTS) {
         if (target.components[component].status === COMPONENT_STATUS.WORKING) {
           target.components[component].status = COMPONENT_STATUS.FAILED;
+          target.components[component].phase = "failed";
           target.components[component].message = "Interrupted before Studio success could be verified.";
         }
       }
@@ -367,7 +368,7 @@ async function runQueue(token) {
       if (!record?.ready) throw new Error(`Source files for ${target.sourceLanguage} are no longer valid.`);
       state.job.currentTargetId = target.id;
       target.status = STATUS_TEXT[component];
-      setComponentResult(state.job, target.id, component, { status: COMPONENT_STATUS.WORKING, message: null });
+      setComponentResult(state.job, target.id, component, { status: COMPONENT_STATUS.WORKING, message: null, phase: "preparing" });
       appendJobLog(state.job, { operation: component, language: target.targetLanguage, message: `Starting ${component}.` });
       await saveJob(state.job);
       render();
@@ -378,7 +379,7 @@ async function runQueue(token) {
         state.unexpectedErrors = 0;
       } catch (error) {
         state.unexpectedErrors += 1;
-        setComponentResult(state.job, target.id, component, { status: COMPONENT_STATUS.FAILED, message: error.message });
+        setComponentResult(state.job, target.id, component, { status: COMPONENT_STATUS.FAILED, message: error.message, phase: "failed" });
         target.status = LANGUAGE_STATUS.FAILED;
         appendJobLog(state.job, diagnosticLog(error, component, target.targetLanguage));
         state.pauseRequested = true;
@@ -438,7 +439,7 @@ function applyComponentOutcome(target, component, result) {
     : result.outcome === "skipped" ? COMPONENT_STATUS.SKIPPED
       : result.outcome === "blocked" ? COMPONENT_STATUS.BLOCKED
         : COMPONENT_STATUS.FAILED;
-  setComponentResult(state.job, target.id, component, { status, message: result.message || null });
+  setComponentResult(state.job, target.id, component, { status, message: result.message || null, phase: result.outcome });
   appendJobLog(state.job, {
     level: status === COMPONENT_STATUS.BLOCKED ? "warning" : status === COMPONENT_STATUS.FAILED ? "error" : "info",
     operation: component,
@@ -460,6 +461,7 @@ async function transferFile(file, component, language) {
   const transferId = crypto.randomUUID();
   const port = chrome.tabs.connect(state.tabId, { name: "language-helper-file-transfer" });
   let closed = false;
+  let lastPersistedPhase = null;
   const waiters = [];
   let terminalResolve;
   let terminalReject;
@@ -468,7 +470,19 @@ async function transferFile(file, component, language) {
   port.onMessage.addListener((message) => {
     if (message.transferId !== transferId) return;
     if (message.type === "ack") waiters.shift()?.resolve(message);
-    if (message.type === "progress" && message.message) ui["job-message"].textContent = message.message;
+    if (message.type === "progress" && message.message) {
+      ui["job-message"].textContent = message.message;
+      const target = state.job?.targets.find((item) => item.id === state.job.currentTargetId && item.targetLanguage === language);
+      const componentState = target?.components?.[component];
+      if (componentState) {
+        componentState.message = message.message;
+        componentState.phase = message.phase || componentState.phase;
+        if (message.phase && message.phase !== lastPersistedPhase) {
+          lastPersistedPhase = message.phase;
+          void saveJob(state.job);
+        }
+      }
+    }
     if (message.type === "complete") terminalResolve(message.result);
     if (message.type === "error") terminalReject(remoteError(message.error, component));
   });
@@ -569,6 +583,7 @@ async function retryFailed() {
     for (const component of COMPONENTS) {
       if (target.components[component].status === COMPONENT_STATUS.FAILED) {
         target.components[component].status = COMPONENT_STATUS.WAITING;
+        target.components[component].phase = "waiting";
         target.components[component].message = null;
       }
     }

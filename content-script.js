@@ -518,8 +518,17 @@
         return matches.length === 1 ? matches[0] : null;
       }, { operation: "audio-publish-ready", timeout: TIMEOUTS.audioUpload }).finally(stopProgress);
       await waitForStableEnabled(publish, "audio-publish-stable");
-      reportProgress({ phase: "youtube-audio-upload", message: `${language}: audio upload finished; publishing the uploaded track…` });
+      reportProgress({ phase: "audio-publish-ready", message: `${language}: Audio popup Publish is ready; publishing the uploaded track…` });
       click(publish);
+      reportProgress({ phase: "audio-waiting-popup-published", message: `${language}: Publish clicked; waiting for the Audio popup to explicitly show Published…` });
+      await waitFor(() => {
+        if (!visible(dialog)) return null;
+        const published = Array.from(dialog.querySelectorAll('[role="status"],span,div,p,yt-formatted-string'))
+          .filter(visible)
+          .find((element) => normalizedText(element) === "Published");
+        return published || (/\bPublished\b/.test(normalizedText(dialog)) ? dialog : null);
+      }, { operation: "verify-audio-popup-published", root: dialog, timeout: TIMEOUTS.audioUpload });
+      reportProgress({ phase: "audio-popup-published", message: `${language}: Audio popup explicitly confirmed Published.` });
       await waitFor(() => !visible(dialog), {
         operation: "verify-audio-publish-dialog-closed",
         timeout: TIMEOUTS.audioUpload
@@ -540,7 +549,7 @@
         return matches.length === 1 ? matches[0] : null;
       }, { operation: "audio-language-update-ready", root: details, timeout: TIMEOUTS.audioUpload });
       await waitForStableEnabled(update, "audio-language-update-stable");
-      reportProgress({ phase: "youtube-audio-processing", message: `${language}: saving the uploaded audio in language details…` });
+      reportProgress({ phase: "audio-details-update", message: `${language}: popup Published confirmed; saving the audio with language-details Update…` });
       click(update);
       await waitFor(() => !languageDialogVisible(details), {
         operation: "verify-audio-language-update",
