@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube Studio Language Helper",
+  "version": "0.1.0",
+  "description": "Safely processes translated assets for one YouTube Studio video using the signed-in Studio tab.",
+  "minimum_chrome_version": "120",
+  "permissions": [
+    "alarms",
+    "scripting",
+    "sidePanel",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://studio.youtube.com/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Open YouTube Studio Language Helper"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://studio.youtube.com/*"
+      ],
+      "js": [
+        "content-script.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

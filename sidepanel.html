@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>YouTube Studio Language Helper</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <p class="eyebrow">Local MV3 extension</p>
+      <h1>Language Helper</h1>
+    </div>
+    <span id="connection-badge" class="badge neutral">Checking Studio</span>
+  </header>
+
+  <main>
+    <section class="card identity-card" aria-labelledby="target-heading">
+      <div class="section-heading">
+        <h2 id="target-heading">Bound target</h2>
+        <button id="refresh-page" class="secondary small" type="button">Refresh</button>
+      </div>
+      <dl class="identity-grid">
+        <div><dt>Channel</dt><dd id="channel-value">—</dd></div>
+        <div><dt>Video</dt><dd id="video-title-value">—</dd></div>
+        <div><dt>Video ID</dt><dd id="video-id-value">—</dd></div>
+        <div><dt>Folder</dt><dd id="folder-value">None selected</dd></div>
+      </dl>
+      <div class="folder-actions">
+        <button id="choose-folder" class="primary" type="button">Choose Folder</button>
+        <button id="grant-folder" class="secondary hidden" type="button">Grant Access Again</button>
+        <input id="directory-fallback" type="file" webkitdirectory multiple hidden>
+      </div>
+      <p id="folder-note" class="note">The selected folder is read-only. Media contents are never stored permanently.</p>
+      <p id="connection-error" class="connection-error hidden" role="alert"></p>
+    </section>
+
+    <section class="stats" aria-label="Preflight counts">
+      <div><strong id="found-count">0</strong><span>Asset sets</span></div>
+      <div><strong id="destination-count">0</strong><span>Destinations</span></div>
+      <div><strong id="ready-count">0</strong><span>Ready</span></div>
+      <div><strong id="incomplete-count">0</strong><span>Incomplete</span></div>
+    </section>
+
+    <section class="card" aria-labelledby="preflight-heading">
+      <div class="section-heading">
+        <h2 id="preflight-heading">Preflight</h2>
+        <span id="stability-badge" class="badge neutral">Not checked</span>
+      </div>
+      <div id="preflight-report" class="report" aria-live="polite">Choose an exported asset folder to begin validation.</div>
+    </section>
+
+    <section class="card controls-card" aria-labelledby="controls-heading">
+      <h2 id="controls-heading">Job controls</h2>
+      <div class="controls-grid">
+        <button id="dry-run" class="secondary" type="button" disabled>Preview / Dry Run</button>
+        <button id="start" class="primary" type="button" disabled>Start</button>
+        <button id="pause" class="secondary" type="button" disabled>Pause</button>
+        <button id="resume" class="secondary" type="button" disabled>Resume</button>
+        <button id="stop" class="danger-outline" type="button" disabled>Stop</button>
+        <button id="retry" class="secondary" type="button" disabled>Retry Failed</button>
+        <button id="reset" class="danger-outline span-two" type="button" disabled>Reset Job</button>
+      </div>
+      <p id="job-message" class="note" aria-live="polite">Dry Run is required before Start.</p>
+    </section>
+
+    <section class="card languages-card" aria-labelledby="languages-heading">
+      <div class="section-heading">
+        <h2 id="languages-heading">Languages</h2>
+        <div class="inline-actions">
+          <button id="select-all" class="text-button" type="button">Select all</button>
+          <button id="select-none" class="text-button" type="button">None</button>
+        </div>
+      </div>
+      <div id="language-list" class="language-list">
+        <p class="empty-state">No folder selected.</p>
+      </div>
+    </section>
+
+    <details class="card log-card">
+      <summary>Activity and error log <span id="log-count">0</span></summary>
+      <div class="log-actions"><button id="copy-log" class="text-button" type="button">Copy log</button></div>
+      <ol id="activity-log" class="activity-log"><li>No activity yet.</li></ol>
+    </details>
+  </main>
+
+  <script type="module" src="sidepanel.js"></script>
+</body>
+</html>

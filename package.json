@@ -1,0 +1,11 @@
+{
+  "name": "youtube-studio-language-helper",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "check": "node scripts/validate-manifest.mjs && node scripts/check-syntax.mjs",
+    "validate:sample": "node scripts/validate-sample.mjs"
+  }
+}
