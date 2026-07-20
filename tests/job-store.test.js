@@ -34,10 +34,10 @@ test("component phases persist independently for resumable UI checkpoints", () =
   });
   setComponentResult(job, "French::French", "audio", {
     status: COMPONENT_STATUS.WORKING,
-    phase: "audio-waiting-popup-published",
+    phase: "audio-waiting-published",
     message: "Waiting for popup confirmation."
   });
-  assert.equal(job.targets[0].components.audio.phase, "audio-waiting-popup-published");
+  assert.equal(job.targets[0].components.audio.phase, "audio-waiting-published");
   assert.equal(job.targets[0].components.audio.message, "Waiting for popup confirmation.");
 });
 

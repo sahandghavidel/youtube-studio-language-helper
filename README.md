@@ -123,7 +123,7 @@ Large media contents are not saved in IndexedDB or `chrome.storage`. One selecte
 
 Progress is recorded independently for metadata, subtitle, audio, and thumbnail. Blocked components are terminal for that run, allowing safe non-conflicting components to continue.
 
-For dubbed audio, the extension uses a guarded multi-stage workflow: it waits for the Audio popup's Publish control, clicks it, requires the same popup to explicitly report **Published**, returns to language details, clicks **Update**, and then monitors the main Languages-table Audio column. A dash or percentage-free **Processing** state keeps the queue waiting; **Processing with a percentage** or final **Published** confirms that it is safe to continue.
+For dubbed audio, the extension uses a guarded multi-stage workflow: it waits for the Audio popup's Publish control and clicks it, then requires an explicit **Published** confirmation from either that transitional popup or the exact language-details Audio row before clicking **Update**. It then monitors the main Languages-table Audio column. A dash or percentage-free **Processing** state keeps the queue waiting; **Processing with a percentage** or final **Published** confirms that it is safe to continue.
 
 ## Existing work
 

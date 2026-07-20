@@ -520,15 +520,28 @@
       await waitForStableEnabled(publish, "audio-publish-stable");
       reportProgress({ phase: "audio-publish-ready", message: `${language}: Audio popup Publish is ready; publishing the uploaded track…` });
       click(publish);
-      reportProgress({ phase: "audio-waiting-popup-published", message: `${language}: Publish clicked; waiting for the Audio popup to explicitly show Published…` });
-      await waitFor(() => {
-        if (!visible(dialog)) return null;
-        const published = Array.from(dialog.querySelectorAll('[role="status"],span,div,p,yt-formatted-string'))
-          .filter(visible)
-          .find((element) => normalizedText(element) === "Published");
-        return published || (/\bPublished\b/.test(normalizedText(dialog)) ? dialog : null);
-      }, { operation: "verify-audio-popup-published", root: dialog, timeout: TIMEOUTS.audioUpload });
-      reportProgress({ phase: "audio-popup-published", message: `${language}: Audio popup explicitly confirmed Published.` });
+      reportProgress({ phase: "audio-waiting-published", message: `${language}: Publish clicked; waiting for an explicit Published confirmation in the Audio popup or language-details Audio row…` });
+      const publishedConfirmation = await waitFor(() => {
+        if (visible(dialog)) {
+          const popupPublished = Array.from(dialog.querySelectorAll('[role="status"],span,div,p,yt-formatted-string'))
+            .filter(visible)
+            .find((element) => normalizedText(element) === "Published");
+          if (popupPublished || /\bPublished\b/.test(normalizedText(dialog))) {
+            return { source: "Audio popup", element: popupPublished || dialog };
+          }
+        }
+
+        const details = currentLanguageDialog(language);
+        const audioRow = details ? mediaRow(details, "Audio") : null;
+        if (audioRow && /\bPublished\b/i.test(normalizedText(audioRow))) {
+          return { source: "language-details Audio row", element: audioRow };
+        }
+        return null;
+      }, { operation: "verify-audio-published-confirmation", root: document, timeout: TIMEOUTS.audioUpload });
+      reportProgress({
+        phase: "audio-published-confirmed",
+        message: `${language}: Published explicitly confirmed in the ${publishedConfirmation.source}.`
+      });
       await waitFor(() => !visible(dialog), {
         operation: "verify-audio-publish-dialog-closed",
         timeout: TIMEOUTS.audioUpload
