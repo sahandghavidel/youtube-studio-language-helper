@@ -11,6 +11,7 @@
     captionsCell: "ytgn-video-translation-cell-captions",
     audioCell: "ytgn-video-translation-cell-audio",
     metadataCell: "ytgn-video-translation-cell-metadata",
+    thumbnailCell: "ytgn-video-translation-cell-thumbnail",
     languageDialog: "ytgn-language-dialog",
     subtitleUploadFileInput: 'ytve-captions-editor-upload-dialog input#captions-file-loader[type="file"]',
     audioUploadFileInput: 'ytgn-audio-upload-dialog input#audio-file-loader[type="file"]',
@@ -215,12 +216,12 @@
 
   function inspectRows() {
     return translationRows().map((row) => {
-      const cells = Array.from(row.querySelectorAll("td"));
       return {
         language: rowLanguage(row),
-        audio: normalizedText(cells[1]) || "–",
-        subtitle: normalizedText(cells[2]) || "–",
-        metadata: normalizedText(cells[3]) || "–"
+        audio: componentCellState(row, "audio"),
+        subtitle: componentCellState(row, "subtitle"),
+        metadata: componentCellState(row, "metadata"),
+        thumbnail: componentCellState(row, "thumbnail")
       };
     });
   }
@@ -348,9 +349,41 @@
   }
 
   function componentCellState(row, component) {
-    const selector = component === "subtitle" ? SELECTORS.captionsCell : component === "audio" ? SELECTORS.audioCell : SELECTORS.metadataCell;
-    const cell = row.querySelector(selector)?.closest("td") || row.querySelector(selector);
+    if (!row) return "–";
+    const selectors = {
+      subtitle: SELECTORS.captionsCell,
+      audio: SELECTORS.audioCell,
+      metadata: SELECTORS.metadataCell,
+      thumbnail: SELECTORS.thumbnailCell
+    };
+    const fallbackIndex = { audio: 1, subtitle: 2, metadata: 3, thumbnail: 4 }[component];
+    const matched = row.querySelector(selectors[component]);
+    const cell = matched?.closest("td") || matched || Array.from(row.querySelectorAll("td"))[fallbackIndex];
+    if (component === "thumbnail") {
+      const image = Array.from(cell?.querySelectorAll("img") || [])
+        .find((candidate) => candidate.complete && candidate.naturalWidth > 0 && candidate.naturalHeight > 0);
+      if (image) return "Published";
+    }
     return normalizedText(cell) || "–";
+  }
+
+  function visibleSummarySkip(language, component) {
+    const row = findRow(language);
+    if (!row) return null;
+    const state = componentCellState(row, component);
+    const alreadyPresent = component === "audio"
+      ? /published|processing/i.test(state)
+      : /published/i.test(state);
+    if (!alreadyPresent) return null;
+    const label = component === "metadata" ? "title and description"
+      : component === "subtitle" ? "subtitle"
+        : component === "audio" ? "audio"
+          : "localized thumbnail";
+    return {
+      outcome: "skipped",
+      fastSkip: true,
+      message: `Main Languages table already shows existing ${label} (${state}); language details were not opened.`
+    };
   }
 
   function hasExistingState(text) {
@@ -496,6 +529,8 @@
 
   async function prepareComponent(message) {
     assertBinding(message.binding);
+    const summarySkip = visibleSummarySkip(message.targetLanguage, message.component);
+    if (summarySkip) return summarySkip;
     await ensureLanguage(message.targetLanguage);
     if (message.component === "metadata") return processMetadata(message.targetLanguage, message.payload);
     if (message.component === "subtitle") return prepareSubtitle(message.targetLanguage);

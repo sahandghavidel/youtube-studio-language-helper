@@ -23,6 +23,7 @@ It does not use the YouTube API, OAuth, API keys, private YouTube endpoints, ana
 - The extension pauses if the bound tab closes, navigates away, stops responding, changes video/channel, or is signed out.
 - Languages and components run sequentially. There are no parallel YouTube uploads.
 - Queue pacing waits a randomized 10–20 seconds between components and 30–60 seconds between languages. Verified Publish/Update controls receive an additional 1–2 second settling delay before the click.
+- Dry Run and each component first inspect the main Translations-table row. Clearly published metadata, subtitles, audio, and localized thumbnails are marked Skipped without opening language details; visible audio Processing is also treated as existing work. These no-click skips use only a 0.5–1.5 second settle.
 - A visible CAPTCHA, sign-in verification, rate-limit, unusual-activity, or similar Studio warning immediately fails the atomic operation and pauses the queue. The extension never attempts to solve or bypass a safeguard.
 - Queue completion and operational errors send one Telegram notification through `http://localhost:9540/api/notifications/telegram`. Notification delivery failures are logged and never change upload results.
 - Existing translated components are never deleted.

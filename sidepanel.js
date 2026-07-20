@@ -341,7 +341,21 @@ function reconcileJobRows(job, rows) {
         ? "Studio shows Processing without a percentage; Resume will wait for transfer confirmation."
         : "Stored completion could not be verified in Studio and will be checked again.";
     }
+    markVisibleExistingComponent(target, "metadata", row.metadata, /published/i);
+    markVisibleExistingComponent(target, "subtitle", row.subtitle, /published/i);
+    markVisibleExistingComponent(target, "audio", row.audio, /published|processing/i);
+    markVisibleExistingComponent(target, "thumbnail", row.thumbnail, /published/i);
+    updateTargetStatus(target);
   }
+}
+
+function markVisibleExistingComponent(target, component, visibleState, pattern) {
+  if (!pattern.test(visibleState || "")) return;
+  if (target.components[component].status === COMPONENT_STATUS.COMPLETE) return;
+  target.components[component].status = COMPONENT_STATUS.SKIPPED;
+  target.components[component].phase = "visible-summary-skip";
+  target.components[component].message = `Dry Run found existing Studio state in the main table (${visibleState}); language details will not be opened.`;
+  target.components[component].verifiedAt = new Date().toISOString();
 }
 
 async function startJob() {
@@ -390,8 +404,10 @@ async function runQueue(token) {
       render();
 
       let failureNotification = null;
+      let componentOutcome = null;
       try {
         const result = await prepareAndRunComponent(target, component, record);
+        componentOutcome = result;
         applyComponentOutcome(target, component, result);
         state.unexpectedErrors = 0;
       } catch (error) {
@@ -419,7 +435,7 @@ async function runQueue(token) {
 
       if (!state.pauseRequested && !state.stopRequested) {
         const nextWork = nextIncompleteWork(state.job);
-        const pacing = pacingForTransition(work, nextWork);
+        const pacing = pacingForTransition(work, nextWork, { fastSkip: componentOutcome?.fastSkip === true });
         if (pacing) {
           const completed = await beginQueueCooldown(token, pacing);
           if (!completed) break;
@@ -475,7 +491,9 @@ async function notifyTelegramAndLog(message, operation, language = null) {
 
 async function beginQueueCooldown(token, pacing) {
   const seconds = Math.ceil(pacing.milliseconds / 1000);
-  const reason = pacing.kind === "between-languages"
+  const reason = pacing.kind === "after-visible-skip"
+    ? `Brief ${seconds}s settle after skipping visible existing work for ${pacing.fromLanguage}.`
+    : pacing.kind === "between-languages"
     ? `Cooling down ${seconds}s before ${pacing.toLanguage}.`
     : `Cooling down ${seconds}s before ${COMPONENT_LABELS[pacing.nextComponent]} for ${pacing.toLanguage}.`;
   state.job.cooldown = {
