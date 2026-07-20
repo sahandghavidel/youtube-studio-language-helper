@@ -383,8 +383,8 @@
       closeLanguageDialog(dialog);
       const pageRow = findRow(language);
       const pageState = pageRow ? componentCellState(pageRow, "audio") : "";
-      if (/processing/i.test(pageState)) {
-        await waitForFinalAudioPublished(language, () => {});
+      if (/processing/i.test(pageState) && !/\b\d{1,3}%/.test(pageState)) {
+        await waitForAudioTransferConfirmed(language, () => {});
       }
       return { outcome: "skipped", message: `Existing audio is already ${/published/i.test(state) ? "Published" : "Processing"}; no upload was attempted.` };
     }
@@ -520,12 +520,14 @@
       await waitForStableEnabled(publish, "audio-publish-stable");
       reportProgress({ phase: "youtube-audio-upload", message: `${language}: audio upload finished; publishing the uploaded track…` });
       click(publish);
-      reportProgress({ phase: "youtube-audio-processing", message: `${language}: upload accepted; waiting for Studio Audio status to become Published…` });
-      const verified = await waitForFinalAudioPublished(language, reportProgress);
+      reportProgress({ phase: "youtube-audio-processing", message: `${language}: waiting for Studio to confirm the audio transfer with a percentage or Published status…` });
+      const verified = await waitForAudioTransferConfirmed(language, reportProgress);
       await pause(STUDIO_SETTLE_MS);
       return {
         outcome: "complete",
-        message: `Audio uploaded and fully processed by Studio (${verified.state}).`
+        message: /published/i.test(verified.state)
+          ? `Audio uploaded and published by Studio (${verified.state}).`
+          : `Audio upload confirmed; Studio is processing it (${verified.state}).`
       };
     }
 
@@ -561,7 +563,7 @@
     const report = () => {
       const progress = Array.from(dialog.querySelectorAll('[role="progressbar"]')).find((element) => element.isConnected);
       const numeric = progress?.getAttribute("aria-valuenow");
-      const textPercent = normalizedText(dialog).match(/\b(?:100|\d{1,2})%\b/)?.[0] || null;
+      const textPercent = normalizedText(dialog).match(/\b\d{1,3}%/)?.[0] || null;
       const percentage = numeric && Number.isFinite(Number(numeric)) ? `${Math.round(Number(numeric))}%` : textPercent;
       const message = percentage
         ? `${language}: YouTube audio upload ${percentage}`
@@ -576,7 +578,7 @@
     return () => observer.disconnect();
   }
 
-  function waitForFinalAudioPublished(language, reportProgress) {
+  function waitForAudioTransferConfirmed(language, reportProgress) {
     let lastState = null;
     return waitFor(() => {
       const row = findRow(language);
@@ -586,11 +588,13 @@
         reportProgress({
           phase: "youtube-audio-processing",
           message: `${language}: Studio Audio status — ${state}`,
-          percentage: state.match(/\b(?:100|\d{1,2})%\b/)?.[0] || null
+          percentage: state.match(/\b\d{1,3}%/)?.[0] || null
         });
       }
-      return /published/i.test(state) && !/processing/i.test(state) ? { row, state } : null;
-    }, { operation: "verify-audio-fully-published", timeout: TIMEOUTS.audioUpload });
+      const published = /published/i.test(state) && !/processing/i.test(state);
+      const processingWithPercentage = /processing/i.test(state) && /\b\d{1,3}%/.test(state);
+      return published || processingWithPercentage ? { row, state } : null;
+    }, { operation: "verify-audio-transfer-confirmed", timeout: TIMEOUTS.audioUpload });
   }
 
   chrome.runtime.onConnect.addListener((port) => {

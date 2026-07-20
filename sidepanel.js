@@ -323,10 +323,13 @@ function reconcileJobRows(job, rows) {
       target.components.subtitle.status = COMPONENT_STATUS.WAITING;
       target.components.subtitle.message = "Stored completion could not be verified in Studio and will be checked again.";
     }
-    if (target.components.audio.status === COMPONENT_STATUS.COMPLETE && !/published/i.test(row.audio || "")) {
+    const audioState = row.audio || "";
+    const audioTransferConfirmed = /published/i.test(audioState)
+      || (/processing/i.test(audioState) && /\b\d{1,3}%/.test(audioState));
+    if (target.components.audio.status === COMPONENT_STATUS.COMPLETE && !audioTransferConfirmed) {
       target.components.audio.status = COMPONENT_STATUS.WAITING;
-      target.components.audio.message = /processing/i.test(row.audio || "")
-        ? "Studio is still processing this audio; Resume will wait for final Published status."
+      target.components.audio.message = /processing/i.test(audioState)
+        ? "Studio shows Processing without a percentage; Resume will wait for transfer confirmation."
         : "Stored completion could not be verified in Studio and will be checked again.";
     }
   }
