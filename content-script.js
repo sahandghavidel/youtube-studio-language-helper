@@ -39,7 +39,16 @@
   }
 
   function accessibleName(element) {
-    return (element.getAttribute("aria-label") || normalizedText(element)).trim();
+    const labelledBy = (element.getAttribute("aria-labelledby") || "")
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((id) => Array.from(element.querySelectorAll("[id]")).find((candidate) => candidate.id === id)
+        || document.getElementById(id))
+      .filter(Boolean)
+      .map(normalizedText)
+      .filter(Boolean)
+      .join(" ");
+    return (element.getAttribute("aria-label") || labelledBy || normalizedText(element)).trim();
   }
 
   function buttonsNamed(name, root = document) {
@@ -382,7 +391,7 @@
     click(add[0]);
     const uploadDialog = await waitFor(() => Array.from(document.querySelectorAll('[role="dialog"],tp-yt-paper-dialog'))
       .filter(visible)
-      .find((candidate) => candidate.getAttribute("aria-label") === `${language} Audio`), { operation: "open-audio-upload" });
+      .find((candidate) => accessibleName(candidate) === `${language} Audio`), { operation: "open-audio-upload" });
     const input = await waitFor(() => document.querySelector(SELECTORS.audioUploadFileInput), { operation: "find-audio-file-input" }).catch(() => null);
     if (!input) {
       const close = [...buttonsNamed("Cancel", uploadDialog), ...buttonsNamed("Close", uploadDialog)];
@@ -473,6 +482,18 @@
         const row = findRow(language);
         return row && /published/i.test(componentCellState(row, "subtitle")) ? row : null;
       }, { operation: "verify-subtitle-published", timeout: TIMEOUTS.upload });
+      const autoClosed = await waitFor(() => !visible(dialog), {
+        operation: "wait-for-subtitle-editor-auto-close",
+        timeout: 3_000
+      }).then(() => true).catch(() => false);
+      if (!autoClosed) {
+        const close = exactOne(buttonsNamed("Close", dialog), "close-published-subtitle-editor", "one Close button");
+        click(close);
+        await waitFor(() => !visible(dialog), {
+          operation: "verify-subtitle-editor-closed",
+          timeout: TIMEOUTS.normal
+        });
+      }
       await pause(STUDIO_SETTLE_MS);
       return { outcome: "complete", message: "Subtitle uploaded and published." };
     }
@@ -480,7 +501,7 @@
     if (component === "audio") {
       const dialog = await waitFor(() => Array.from(document.querySelectorAll('[role="dialog"]'))
         .filter(visible)
-        .find((candidate) => candidate.getAttribute("aria-label") === `${language} Audio`), { operation: "audio-upload-dialog", timeout: TIMEOUTS.upload });
+        .find((candidate) => accessibleName(candidate) === `${language} Audio`), { operation: "audio-upload-dialog", timeout: TIMEOUTS.upload });
       const publish = await waitFor(() => {
         const matches = buttonsNamed("Publish", dialog).filter((button) => !button.hasAttribute("disabled"));
         return matches.length === 1 ? matches[0] : null;
