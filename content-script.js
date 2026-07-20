@@ -20,6 +20,8 @@
   const TIMEOUTS = Object.freeze({ short: 8_000, normal: 20_000, upload: 180_000, audioUpload: 30 * 60_000 });
   const ACTION_SETTLE_MS = 750;
   const STUDIO_SETTLE_MS = 2_500;
+  const BEFORE_COMMIT_MIN_MS = 1_000;
+  const BEFORE_COMMIT_MAX_MS = 2_000;
   const VIDEO_URL = /^https:\/\/studio\.youtube\.com\/video\/([^/?#]+)\/translations(?:[/?#]|$)/;
   const transfers = new Map();
   let pendingUpload = null;
@@ -79,6 +81,53 @@
     return new Promise((resolve) => setTimeout(resolve, milliseconds));
   }
 
+  function randomPause(minimum, maximum) {
+    return pause(Math.floor(minimum + Math.random() * (maximum - minimum + 1)));
+  }
+
+  function visibleSafeguard() {
+    if (!document.querySelector('button[aria-label="Account"], [aria-label="Account"]')) {
+      return "the signed-in Studio account control is no longer present";
+    }
+    const captcha = Array.from(document.querySelectorAll('iframe[src*="recaptcha" i], iframe[title*="captcha" i], [aria-label*="captcha" i]'))
+      .find(visible);
+    if (captcha) return "CAPTCHA challenge";
+
+    const warningPatterns = [
+      /unusual (?:traffic|activity)/i,
+      /too many requests/i,
+      /rate limit/i,
+      /verify (?:that )?(?:it'?s|this is) you/i,
+      /confirm (?:that )?(?:it'?s|this is) you/i,
+      /sign in to continue/i,
+      /session (?:has )?expired/i,
+      /try again later/i
+    ];
+    const surfaces = Array.from(document.querySelectorAll('[role="alert"],[role="alertdialog"],[role="dialog"],tp-yt-paper-toast,ytcp-error-banner'))
+      .filter(visible);
+    for (const surface of surfaces) {
+      const text = normalizedText(surface);
+      if (warningPatterns.some((pattern) => pattern.test(text))) return text.slice(0, 240);
+    }
+    return null;
+  }
+
+  function assertNoSafeguard(operation) {
+    const found = visibleSafeguard();
+    if (!found) return;
+    throw diagnosticError(
+      "youtube-safeguard",
+      "no CAPTCHA, sign-in challenge, rate-limit, or unusual-activity warning",
+      `${found} while ${operation}`,
+      false
+    );
+  }
+
+  async function settleBeforeStudioCommit() {
+    await randomPause(BEFORE_COMMIT_MIN_MS, BEFORE_COMMIT_MAX_MS);
+    assertNoSafeguard("waiting before a Studio commit action");
+  }
+
   async function waitForStableEnabled(button, operation) {
     await waitFor(() => button?.isConnected
       && !button.hasAttribute("disabled")
@@ -101,6 +150,7 @@
       };
       const check = () => {
         try {
+          assertNoSafeguard(operation);
           const value = predicate();
           if (value) finish(value);
         } catch (error) {
@@ -138,6 +188,7 @@
   }
 
   function assertBinding(binding) {
+    assertNoSafeguard("verifying the bound Studio page");
     const page = inspectPage();
     if (!page.signedIn) throw diagnosticError("verify-page", "a signed-in YouTube Studio account", "signed out", true);
     if (!page.onLanguagesPage) throw diagnosticError("verify-page", "the bound video's Languages page", page.url, true);
@@ -285,6 +336,7 @@
     setEditableValue(descriptionBox, payload.description);
     const update = exactOne(buttonsNamed("Update", dialog), "save-metadata", "one Update button in the language dialog");
     await waitForStableEnabled(update, "enable-metadata-update");
+    await settleBeforeStudioCommit();
     click(update);
     await waitFor(() => !languageDialogVisible(dialog), { operation: "verify-metadata-update", timeout: TIMEOUTS.normal });
     await waitFor(() => {
@@ -486,6 +538,7 @@
         return matches.length === 1 ? matches[0] : null;
       }, { operation: "subtitle-publish-ready", timeout: TIMEOUTS.upload });
       await waitForStableEnabled(publish, "subtitle-publish-stable");
+      await settleBeforeStudioCommit();
       click(publish);
       await waitFor(() => {
         const row = findRow(language);
@@ -519,6 +572,7 @@
       }, { operation: "audio-publish-ready", timeout: TIMEOUTS.audioUpload }).finally(stopProgress);
       await waitForStableEnabled(publish, "audio-publish-stable");
       reportProgress({ phase: "audio-publish-ready", message: `${language}: Audio popup Publish is ready; publishing the uploaded track…` });
+      await settleBeforeStudioCommit();
       click(publish);
       reportProgress({ phase: "audio-waiting-published", message: `${language}: Publish clicked; waiting for an explicit Published confirmation in the Audio popup or language-details Audio row…` });
       const publishedConfirmation = await waitFor(() => {
@@ -563,6 +617,7 @@
       }, { operation: "audio-language-update-ready", root: details, timeout: TIMEOUTS.audioUpload });
       await waitForStableEnabled(update, "audio-language-update-stable");
       reportProgress({ phase: "audio-details-update", message: `${language}: popup Published confirmed; saving the audio with language-details Update…` });
+      await settleBeforeStudioCommit();
       click(update);
       await waitFor(() => !languageDialogVisible(details), {
         operation: "verify-audio-language-update",
@@ -599,6 +654,7 @@
         return matches.length === 1 ? matches[0] : null;
       }, { operation: "thumbnail-update-ready", timeout: TIMEOUTS.upload });
       await waitForStableEnabled(update, "thumbnail-update-stable");
+      await settleBeforeStudioCommit();
       click(update);
       await waitFor(() => !languageDialogVisible(dialog), { operation: "verify-thumbnail-update", timeout: TIMEOUTS.upload });
       await pause(STUDIO_SETTLE_MS);

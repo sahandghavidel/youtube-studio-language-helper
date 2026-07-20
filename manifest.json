@@ -11,7 +11,8 @@
     "storage"
   ],
   "host_permissions": [
-    "https://studio.youtube.com/*"
+    "https://studio.youtube.com/*",
+    "http://localhost:9540/*"
   ],
   "background": {
     "service_worker": "service-worker.js",

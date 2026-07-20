@@ -12,6 +12,8 @@ import { clearDirectoryHandle, getDirectoryHandle, saveDirectoryHandle } from ".
 import { filesFromDirectoryHandle, parseAssetFiles, snapshotsEqual } from "./lib/folder-parser.js";
 import { appendJobLog, clearJob, createJob, loadJob, nextIncompleteWork, saveJob, setComponentResult } from "./lib/job-store.js";
 import { expandLanguageTargets } from "./lib/language-mapping.js";
+import { pacingForTransition } from "./lib/pacing.js";
+import { buildCompletionNotification, buildFailureNotification, sendTelegramNotification } from "./lib/telegram-notifier.js";
 import { validateParsedFolder } from "./lib/validation.js";
 
 const state = {
@@ -80,7 +82,13 @@ function wireEvents() {
   ui["copy-log"].addEventListener("click", copyLog);
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "local" && changes.activeJob?.newValue) {
+      const externallyPaused = state.job?.status === JOB_STATUS.RUNNING
+        && changes.activeJob.newValue.status === JOB_STATUS.PAUSED;
       state.job = changes.activeJob.newValue;
+      if (externallyPaused) {
+        state.pauseRequested = true;
+        ui["job-message"].textContent = state.job.pauseReason || "The queue was paused by a Studio safety check.";
+      }
       render();
     }
   });
@@ -360,7 +368,15 @@ async function runQueue(token) {
     const validation = await validateParsedFolder(parsed);
     const records = new Map(validation.records.map((record) => [record.language, record]));
 
-    while (token === state.runToken && !state.pauseRequested && !state.stopRequested) {
+    let restoredCooldownCompleted = true;
+    if (state.job.cooldown?.until > Date.now()) {
+      restoredCooldownCompleted = await waitForQueueCooldown(token, state.job.cooldown);
+    } else if (state.job.cooldown) {
+      state.job.cooldown = null;
+      await saveJob(state.job);
+    }
+
+    while (restoredCooldownCompleted && token === state.runToken && !state.pauseRequested && !state.stopRequested) {
       const work = nextIncompleteWork(state.job);
       if (!work) break;
       const { target, component } = work;
@@ -373,6 +389,7 @@ async function runQueue(token) {
       await saveJob(state.job);
       render();
 
+      let failureNotification = null;
       try {
         const result = await prepareAndRunComponent(target, component, record);
         applyComponentOutcome(target, component, result);
@@ -384,11 +401,30 @@ async function runQueue(token) {
         appendJobLog(state.job, diagnosticLog(error, component, target.targetLanguage));
         state.pauseRequested = true;
         state.job.pauseReason = `Paused after ${target.targetLanguage} ${component} failed. Review the diagnostic, then use Retry Failed and Resume.`;
+        failureNotification = buildFailureNotification(state.job, {
+          language: target.targetLanguage,
+          operation: component,
+          reason: error.message
+        });
       }
 
       updateTargetStatus(target);
       await saveJob(state.job);
       render();
+      if (failureNotification) {
+        await notifyTelegramAndLog(failureNotification, "error-notification", target.targetLanguage);
+        await saveJob(state.job);
+        render();
+      }
+
+      if (!state.pauseRequested && !state.stopRequested) {
+        const nextWork = nextIncompleteWork(state.job);
+        const pacing = pacingForTransition(work, nextWork);
+        if (pacing) {
+          const completed = await beginQueueCooldown(token, pacing);
+          if (!completed) break;
+        }
+      }
     }
 
     if (state.stopRequested) {
@@ -400,8 +436,11 @@ async function runQueue(token) {
     } else if (!nextIncompleteWork(state.job)) {
       state.job.status = JOB_STATUS.COMPLETE;
       state.job.pauseReason = null;
+      state.job.cooldown = null;
       appendJobLog(state.job, { operation: "queue", message: "All selected destinations reached a terminal component state." });
       await chrome.runtime.sendMessage({ type: "CLEAR_RUNTIME_TARGET" });
+      await saveJob(state.job);
+      await notifyTelegramAndLog(buildCompletionNotification(state.job), "completion-notification");
     }
     await saveJob(state.job);
   } catch (error) {
@@ -409,10 +448,65 @@ async function runQueue(token) {
     state.job.pauseReason = error.message;
     appendJobLog(state.job, diagnosticLog(error, "queue", null));
     await saveJob(state.job);
+    await notifyTelegramAndLog(buildFailureNotification(state.job, {
+      operation: "queue",
+      reason: error.message
+    }), "error-notification");
+    await saveJob(state.job);
   } finally {
     setBusy(false, state.job.pauseReason || (state.job.status === JOB_STATUS.COMPLETE ? "Queue complete." : "Queue stopped."));
     render();
   }
+}
+
+async function notifyTelegramAndLog(message, operation, language = null) {
+  const result = await sendTelegramNotification(message);
+  appendJobLog(state.job, {
+    level: result.success ? "info" : "warning",
+    operation,
+    language,
+    message: result.success
+      ? "Telegram notification sent through the local Ultimate Video Editor server."
+      : `Telegram notification was not sent: ${result.error}`,
+    retrySafe: true
+  });
+  return result;
+}
+
+async function beginQueueCooldown(token, pacing) {
+  const seconds = Math.ceil(pacing.milliseconds / 1000);
+  const reason = pacing.kind === "between-languages"
+    ? `Cooling down ${seconds}s before ${pacing.toLanguage}.`
+    : `Cooling down ${seconds}s before ${COMPONENT_LABELS[pacing.nextComponent]} for ${pacing.toLanguage}.`;
+  state.job.cooldown = {
+    kind: pacing.kind,
+    until: Date.now() + pacing.milliseconds,
+    reason,
+    fromLanguage: pacing.fromLanguage,
+    toLanguage: pacing.toLanguage,
+    nextComponent: pacing.nextComponent
+  };
+  appendJobLog(state.job, {
+    operation: "pacing",
+    language: pacing.toLanguage,
+    message: reason
+  });
+  await saveJob(state.job);
+  return waitForQueueCooldown(token, state.job.cooldown);
+}
+
+async function waitForQueueCooldown(token, cooldown) {
+  while (Date.now() < cooldown.until) {
+    if (token !== state.runToken || state.pauseRequested || state.stopRequested) return false;
+    const remainingSeconds = Math.max(1, Math.ceil((cooldown.until - Date.now()) / 1000));
+    ui["job-message"].textContent = `${cooldown.reason.replace(/\d+s/, `${remainingSeconds}s`)} Pause or Stop remains available.`;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(500, cooldown.until - Date.now())));
+  }
+  if (token !== state.runToken || state.pauseRequested || state.stopRequested) return false;
+  state.job.cooldown = null;
+  await saveJob(state.job);
+  ui["job-message"].textContent = "Cooldown complete. Continuing the sequential queue…";
+  return true;
 }
 
 async function prepareAndRunComponent(target, component, record) {

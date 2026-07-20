@@ -1,5 +1,6 @@
 import { JOB_STATUS } from "./lib/constants.js";
 import { appendJobLog, loadJob, saveJob } from "./lib/job-store.js";
+import { buildFailureNotification, sendTelegramNotification } from "./lib/telegram-notifier.js";
 
 const RUNTIME_KEY = "jobRuntime";
 const HEARTBEAT_ALARM = "studio-heartbeat";
@@ -82,5 +83,15 @@ async function pauseActiveJob(reason, operation) {
   job.status = JOB_STATUS.PAUSED;
   job.pauseReason = reason;
   appendJobLog(job, { level: "error", operation, message: reason, retrySafe: true });
+  await saveJob(job);
+  const notification = await sendTelegramNotification(buildFailureNotification(job, { operation, reason }));
+  appendJobLog(job, {
+    level: notification.success ? "info" : "warning",
+    operation: "error-notification",
+    message: notification.success
+      ? "Telegram notification sent through the local Ultimate Video Editor server."
+      : `Telegram notification was not sent: ${notification.error}`,
+    retrySafe: true
+  });
   await saveJob(job);
 }

@@ -2,13 +2,14 @@
 
 A local, unpacked Manifest V3 Chrome extension that processes translated assets for one YouTube Studio video through the existing signed-in Studio tab.
 
-It does not use the YouTube API, OAuth, API keys, private endpoints, external servers, analytics, telemetry, remote JavaScript, or a native companion.
+It does not use the YouTube API, OAuth, API keys, private YouTube endpoints, analytics, telemetry, remote JavaScript, or a native companion. Optional Telegram notifications are relayed through the user's existing local Ultimate Video Editor server; Telegram credentials never enter this extension.
 
 > **Project status:** Early controlled testing. Test one empty translated language first and verify every component in YouTube Studio before selecting a larger queue. YouTube Studio can change its interface without notice, so selectors may require maintenance.
 
 ## Requirements
 
 - Google Chrome with Manifest V3 and Side Panel support
+- Ultimate Video Editor running locally on port `9540` when Telegram notifications are desired
 - A signed-in YouTube Studio session
 - One video's **Languages** page open in Studio
 - A local export folder following the four-file contract below
@@ -21,6 +22,9 @@ It does not use the YouTube API, OAuth, API keys, private endpoints, external se
 - Jobs are bound to the YouTube video ID, channel ID, and selected folder name.
 - The extension pauses if the bound tab closes, navigates away, stops responding, changes video/channel, or is signed out.
 - Languages and components run sequentially. There are no parallel YouTube uploads.
+- Queue pacing waits a randomized 10–20 seconds between components and 30–60 seconds between languages. Verified Publish/Update controls receive an additional 1–2 second settling delay before the click.
+- A visible CAPTCHA, sign-in verification, rate-limit, unusual-activity, or similar Studio warning immediately fails the atomic operation and pauses the queue. The extension never attempts to solve or bypass a safeguard.
+- Queue completion and operational errors send one Telegram notification through `http://localhost:9540/api/notifications/telegram`. Notification delivery failures are logged and never change upload results.
 - Existing translated components are never deleted.
 - Existing subtitle and audio tracks are blocked because replacing them can require deletion.
 - Existing metadata or thumbnails require a separate, component-specific overwrite confirmation.
@@ -43,7 +47,9 @@ It does not use the YouTube API, OAuth, API keys, private endpoints, external se
 
 After editing extension source files, return to `chrome://extensions` and click the extension's **Reload** button. Reload the YouTube Studio tab as well so the updated content script is installed in that page.
 
-If the normal manifest injection is missing, the side panel's **Refresh** button uses Chrome's `scripting` permission to inject the same packaged `content-script.js` into the current Studio tab and retry once. Host access remains restricted to `https://studio.youtube.com/*`.
+If the normal manifest injection is missing, the side panel's **Refresh** button uses Chrome's `scripting` permission to inject the same packaged `content-script.js` into the current Studio tab and retry once. YouTube host access remains restricted to `https://studio.youtube.com/*`.
+
+The only additional host permission is `http://localhost:9540/*`, used exclusively for the optional Telegram notification route. Ultimate Video Editor's page does not need to be open in a browser, but its local server must be running. The bot token and chat ID remain in that project's `.env.local`; do not copy them into this extension.
 
 ## Expected asset folder
 
@@ -102,6 +108,8 @@ All other source names must match one exact Studio language label unless a suppo
 9. Press **Start** only when the Dry Run passes.
 
 Keep Chrome open, keep the Studio tab available, keep the side panel open during large file transfers, keep the Mac awake, and keep the internet connection active. The Studio tab can remain in a background Chrome window while you use another application.
+
+Cooldowns are shown in the side-panel status and activity log. Pause and Stop remain responsive during a cooldown, and an interrupted cooldown is saved with the job. These delays reduce request bursts and give Studio time to settle; they do not guarantee that automated browser interaction is permitted or undetected.
 
 ## Folder permission and persistence
 
