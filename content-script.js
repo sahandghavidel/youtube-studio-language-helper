@@ -17,7 +17,7 @@
     thumbnailFileInput: 'ytgn-language-dialog input#file-loader[type="file"]'
   });
 
-  const TIMEOUTS = Object.freeze({ short: 8_000, normal: 20_000, upload: 180_000 });
+  const TIMEOUTS = Object.freeze({ short: 8_000, normal: 20_000, upload: 180_000, audioUpload: 30 * 60_000 });
   const ACTION_SETTLE_MS = 750;
   const STUDIO_SETTLE_MS = 2_500;
   const VIDEO_URL = /^https:\/\/studio\.youtube\.com\/video\/([^/?#]+)\/translations(?:[/?#]|$)/;
@@ -454,7 +454,7 @@
     return bytes;
   }
 
-  async function attachPendingFile(transfer) {
+  async function attachPendingFile(transfer, reportProgress = () => {}) {
     if (!pendingUpload || pendingUpload.component !== transfer.component || pendingUpload.language !== transfer.language) {
       throw diagnosticError("attach-file", `${transfer.component} input for ${transfer.language}`, "no matching prepared input", false);
     }
@@ -466,12 +466,12 @@
     pendingUpload.input.files = dataTransfer.files;
     pendingUpload.input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
     pendingUpload.input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-    const result = await finalizeUpload(pendingUpload.component, pendingUpload.language);
+    const result = await finalizeUpload(pendingUpload.component, pendingUpload.language, reportProgress);
     pendingUpload = null;
     return result;
   }
 
-  async function finalizeUpload(component, language) {
+  async function finalizeUpload(component, language, reportProgress = () => {}) {
     if (component === "subtitle") {
       const dialog = await waitFor(() => Array.from(document.querySelectorAll('[role="dialog"]'))
         .filter(visible)
@@ -505,12 +505,15 @@
     if (component === "audio") {
       const dialog = await waitFor(() => Array.from(document.querySelectorAll('[role="dialog"]'))
         .filter(visible)
-        .find((candidate) => accessibleName(candidate) === `${language} Audio`), { operation: "audio-upload-dialog", timeout: TIMEOUTS.upload });
+        .find((candidate) => accessibleName(candidate) === `${language} Audio`), { operation: "audio-upload-dialog", timeout: TIMEOUTS.audioUpload });
+      reportProgress({ phase: "youtube-audio-upload", message: `${language}: waiting for YouTube to finish receiving the audio file…` });
+      const stopProgress = observeAudioUploadProgress(dialog, language, reportProgress);
       const publish = await waitFor(() => {
         const matches = buttonsNamed("Publish", dialog).filter((button) => !button.hasAttribute("disabled"));
         return matches.length === 1 ? matches[0] : null;
-      }, { operation: "audio-publish-ready", timeout: TIMEOUTS.upload });
+      }, { operation: "audio-publish-ready", timeout: TIMEOUTS.audioUpload }).finally(stopProgress);
       await waitForStableEnabled(publish, "audio-publish-stable");
+      reportProgress({ phase: "youtube-audio-upload", message: `${language}: audio upload finished; publishing the uploaded track…` });
       click(publish);
       const verified = await waitFor(() => {
         const details = currentLanguageDialog(language);
@@ -521,7 +524,7 @@
         const pageRow = findRow(language);
         const pageState = pageRow ? componentCellState(pageRow, "audio") : "";
         return /published|processing/i.test(pageState) ? { row: pageRow, state: pageState } : null;
-      }, { operation: "verify-audio-upload", timeout: TIMEOUTS.upload });
+      }, { operation: "verify-audio-upload", timeout: TIMEOUTS.audioUpload });
       await pause(STUDIO_SETTLE_MS);
       return {
         outcome: "complete",
@@ -530,7 +533,18 @@
     }
 
     if (component === "thumbnail") {
-      const dialog = document.querySelector(SELECTORS.languageDialog);
+      const dialog = currentLanguageDialog(language);
+      if (!dialog) throw diagnosticError("thumbnail-preview-ready", `the open ${language} details dialog`, "no visible language dialog", true);
+      await waitFor(() => {
+        const row = dialog ? mediaRow(dialog, "Thumbnail") : null;
+        if (!row) return null;
+        const preview = Array.from(row.querySelectorAll("img"))
+          .filter(visible)
+          .find((image) => image.complete && image.naturalWidth > 0 && image.naturalHeight > 0);
+        const deleteControls = buttonsNamed("Delete", row);
+        return preview && deleteControls.length === 1 ? { preview, row } : null;
+      }, { operation: "thumbnail-preview-ready", timeout: TIMEOUTS.upload });
+      await pause(ACTION_SETTLE_MS);
       const update = await waitFor(() => {
         const matches = buttonsNamed("Update", dialog).filter((button) => !button.hasAttribute("disabled"));
         return matches.length === 1 ? matches[0] : null;
@@ -543,6 +557,26 @@
     }
 
     throw diagnosticError("finalize-upload", "subtitle, audio, or thumbnail", component, false);
+  }
+
+  function observeAudioUploadProgress(dialog, language, reportProgress) {
+    let lastMessage = null;
+    const report = () => {
+      const progress = Array.from(dialog.querySelectorAll('[role="progressbar"]')).find((element) => element.isConnected);
+      const numeric = progress?.getAttribute("aria-valuenow");
+      const textPercent = normalizedText(dialog).match(/\b(?:100|\d{1,2})%\b/)?.[0] || null;
+      const percentage = numeric && Number.isFinite(Number(numeric)) ? `${Math.round(Number(numeric))}%` : textPercent;
+      const message = percentage
+        ? `${language}: YouTube audio upload ${percentage}`
+        : `${language}: YouTube is receiving the audio file…`;
+      if (message === lastMessage) return;
+      lastMessage = message;
+      reportProgress({ phase: "youtube-audio-upload", message, percentage });
+    };
+    const observer = new MutationObserver(report);
+    observer.observe(dialog, { childList: true, subtree: true, attributes: true, characterData: true });
+    report();
+    return () => observer.disconnect();
   }
 
   chrome.runtime.onConnect.addListener((port) => {
@@ -565,7 +599,9 @@
           return;
         }
         if (message.type === "end") {
-          const result = await attachPendingFile(transfer);
+          const result = await attachPendingFile(transfer, (progress) => {
+            port.postMessage({ type: "progress", transferId: transfer.transferId, ...progress });
+          });
           transfers.delete(transfer.transferId);
           port.postMessage({ type: "complete", transferId: transfer.transferId, result });
         }

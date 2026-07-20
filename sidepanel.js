@@ -463,6 +463,7 @@ async function transferFile(file, component, language) {
   port.onMessage.addListener((message) => {
     if (message.transferId !== transferId) return;
     if (message.type === "ack") waiters.shift()?.resolve(message);
+    if (message.type === "progress" && message.message) ui["job-message"].textContent = message.message;
     if (message.type === "complete") terminalResolve(message.result);
     if (message.type === "error") terminalReject(remoteError(message.error, component));
   });
