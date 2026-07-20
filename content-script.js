@@ -379,7 +379,11 @@
       closeLanguageDialog(dialog);
       return { outcome: "blocked", message: "An auto-dub already exists. YouTube requires deletion before manual upload, so audio was blocked." };
     }
-    if (/published|processing|draft/i.test(state) && !/^audio\s+add$/i.test(state)) {
+    if (/published|processing/i.test(state)) {
+      closeLanguageDialog(dialog);
+      return { outcome: "skipped", message: `Existing audio is already ${/published/i.test(state) ? "Published" : "Processing"}; no upload was attempted.` };
+    }
+    if (/draft/i.test(state) && !/^audio\s+add$/i.test(state)) {
       closeLanguageDialog(dialog);
       return { outcome: "blocked", message: `Existing audio state: ${state}. The extension will not replace it.` };
     }
@@ -508,13 +512,21 @@
       }, { operation: "audio-publish-ready", timeout: TIMEOUTS.upload });
       await waitForStableEnabled(publish, "audio-publish-stable");
       click(publish);
-      await waitFor(() => {
-        const row = findRow(language);
-        const state = row ? componentCellState(row, "audio") : "";
-        return /published|processing/i.test(state) ? row : null;
+      const verified = await waitFor(() => {
+        const details = currentLanguageDialog(language);
+        const detailRow = details ? mediaRow(details, "Audio") : null;
+        const detailState = normalizedText(detailRow);
+        if (/published|processing/i.test(detailState)) return { row: detailRow, state: detailState };
+
+        const pageRow = findRow(language);
+        const pageState = pageRow ? componentCellState(pageRow, "audio") : "";
+        return /published|processing/i.test(pageState) ? { row: pageRow, state: pageState } : null;
       }, { operation: "verify-audio-upload", timeout: TIMEOUTS.upload });
       await pause(STUDIO_SETTLE_MS);
-      return { outcome: "complete", message: "Audio uploaded and accepted by Studio." };
+      return {
+        outcome: "complete",
+        message: `Audio uploaded and accepted by Studio (${/published/i.test(verified.state) ? "Published" : "Processing"}).`
+      };
     }
 
     if (component === "thumbnail") {
