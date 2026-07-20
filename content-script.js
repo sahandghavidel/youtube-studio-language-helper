@@ -302,10 +302,13 @@
     if (hasExistingState(state)) return { outcome: "blocked", message: `Existing subtitle state: ${state}. The extension will not replace it.` };
 
     const languageDialog = await openLanguageDialog(language);
-    const row = mediaRow(languageDialog, "Subtitles");
+    const row = await waitFor(() => mediaRow(languageDialog, "Subtitles"), {
+      operation: "find-subtitle-media-row",
+      root: languageDialog
+    }).catch(() => null);
     if (!row) {
       closeLanguageDialog(languageDialog);
-      throw diagnosticError("prepare-subtitle", "a Manual subtitles row in language details", "no Subtitles row", true);
+      throw diagnosticError("prepare-subtitle", "a rendered Manual subtitles row in language details", "row did not appear before timeout", true);
     }
     const detailState = normalizedText(row);
     if (/published|processing|draft/i.test(detailState) && !/\badd\b/i.test(detailState)) {
@@ -341,15 +344,26 @@
   }
 
   function mediaRow(dialog, typeLabel) {
-    return Array.from(dialog.querySelectorAll("tr")).find((row) => normalizedText(row.querySelector("td")) === typeLabel) || null;
+    const expectedName = typeLabel === "Subtitles" ? "Manual subtitles" : typeLabel;
+    const matches = Array.from(dialog.querySelectorAll("tr")).filter((row) => {
+      const cells = Array.from(row.querySelectorAll("td"));
+      return cells.some((cell) => normalizedText(cell) === expectedName);
+    });
+    if (matches.length > 1) {
+      throw diagnosticError("find-media-row", `one exact ${expectedName} row`, `${matches.length} rows`, false);
+    }
+    return matches[0] || null;
   }
 
   async function prepareAudio(language) {
     const dialog = await openLanguageDialog(language);
-    const row = mediaRow(dialog, "Audio");
+    const row = await waitFor(() => mediaRow(dialog, "Audio"), {
+      operation: "find-audio-media-row",
+      root: dialog
+    }).catch(() => null);
     if (!row) {
       closeLanguageDialog(dialog);
-      throw diagnosticError("prepare-audio", "an Audio row in language details", "no Audio row", true);
+      throw diagnosticError("prepare-audio", "a rendered Audio row in language details", "row did not appear before timeout", true);
     }
     const state = normalizedText(row);
     if (/auto-dubbed/i.test(state)) {
@@ -382,10 +396,13 @@
 
   async function prepareThumbnail(language, allowOverwrite) {
     const dialog = await openLanguageDialog(language);
-    const thumbnailRow = mediaRow(dialog, "Thumbnail");
+    const thumbnailRow = await waitFor(() => mediaRow(dialog, "Thumbnail"), {
+      operation: "find-thumbnail-media-row",
+      root: dialog
+    }).catch(() => null);
     if (!thumbnailRow) {
       closeLanguageDialog(dialog);
-      return { outcome: "blocked", message: "This Studio language dialog does not expose a visible localized-thumbnail control." };
+      return { outcome: "blocked", message: "This Studio language dialog did not render a localized-thumbnail row before timeout." };
     }
     const text = normalizedText(thumbnailRow);
     if (/change|published/i.test(text) && !allowOverwrite) {
