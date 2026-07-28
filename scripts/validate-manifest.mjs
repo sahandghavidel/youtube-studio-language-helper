@@ -15,6 +15,7 @@ if (!Array.isArray(manifest.host_permissions)
 }
 if ((manifest.host_permissions || []).includes("<all_urls>")) errors.push("<all_urls> is forbidden");
 if ((manifest.permissions || []).includes("tabs")) errors.push("tabs permission is not required and should not be requested");
+if (!(manifest.permissions || []).includes("power")) errors.push("power permission is required for job-scoped display keep-awake");
 if (!(manifest.permissions || []).includes("scripting")) errors.push("scripting permission is required for the Studio reconnect fallback");
 if (manifest.content_security_policy?.extension_pages?.includes("unsafe-eval")) errors.push("unsafe-eval is forbidden");
 

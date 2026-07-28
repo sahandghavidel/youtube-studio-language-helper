@@ -39,3 +39,45 @@ test("a visible-table skip uses only the brief 0.5 to 1.5 second range", () => {
 test("no delay is created after the final component", () => {
   assert.equal(pacingForTransition(work("de", "German", "thumbnail"), null), null);
 });
+
+test("verified Studio waiting is credited while retaining a post-confirmation settle", () => {
+  const samples = [0, 0];
+  const pacing = pacingForTransition(
+    work("de", "German", "audio"),
+    work("fr", "French", "metadata"),
+    {
+      lastMutationAtMs: 10_000,
+      nowMs: 50_000,
+      random: () => samples.shift()
+    }
+  );
+  assert.equal(pacing.originalMilliseconds, 30_000);
+  assert.equal(pacing.creditedMilliseconds, 30_000);
+  assert.equal(pacing.milliseconds, PACING_RANGES.afterCreditedWait.min);
+});
+
+test("partial Studio waiting only leaves the unconsumed pacing interval", () => {
+  const samples = [0, 0];
+  const pacing = pacingForTransition(
+    work("de", "German", "metadata"),
+    work("de", "German", "subtitle"),
+    {
+      lastMutationAtMs: 10_000,
+      nowMs: 14_000,
+      random: () => samples.shift()
+    }
+  );
+  assert.equal(pacing.originalMilliseconds, 10_000);
+  assert.equal(pacing.creditedMilliseconds, 4_000);
+  assert.equal(pacing.milliseconds, 6_000);
+});
+
+test("invalid or future mutation timestamps retain the full cooldown", () => {
+  const pacing = pacingForTransition(
+    work("de", "German", "audio"),
+    work("fr", "French", "metadata"),
+    { lastMutationAtMs: 60_000, nowMs: 50_000, random: () => 0 }
+  );
+  assert.equal(pacing.milliseconds, PACING_RANGES.betweenLanguages.min);
+  assert.equal(pacing.creditedMilliseconds, 0);
+});

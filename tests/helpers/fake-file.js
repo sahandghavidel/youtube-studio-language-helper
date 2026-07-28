@@ -36,6 +36,14 @@ export function wavBytes(size = 64) {
   return bytes;
 }
 
+export function m4aBytes(size = 64) {
+  const bytes = new Uint8Array(size);
+  bytes.set([0, 0, 0, 24], 0);
+  bytes.set(new TextEncoder().encode("ftyp"), 4);
+  bytes.set(new TextEncoder().encode("M4A "), 8);
+  return bytes;
+}
+
 export function validSrt(text = "Translated line") {
   return `1\n00:00:00,000 --> 00:00:01,500\n${text}\n`;
 }

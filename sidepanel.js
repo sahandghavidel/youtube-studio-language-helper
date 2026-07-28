@@ -269,6 +269,7 @@ async function restoreJob() {
     }
     appendJobLog(state.job, { level: "warning", operation: "restart-recovery", message: state.job.pauseReason, retrySafe: true });
     await saveJob(state.job);
+    await releaseDisplayKeepAwake();
   }
 }
 
@@ -298,7 +299,7 @@ async function runDryRun() {
     state.job.dryRunCompletedAt = new Date().toISOString();
     appendJobLog(state.job, {
       operation: "dry-run",
-      message: `Dry Run completed with ${selectedRecords().length} selected asset sets and ${targets.length} Studio destinations. No Studio changes were made.`
+      message: `Dry Run completed with ${selectedRecords().length} selected partial or complete asset sets and ${targets.length} Studio destinations. No Studio changes were made.`
     });
     reconcileJobRows(state.job, response.rows);
     await saveJob(state.job);
@@ -316,7 +317,15 @@ function mergeExistingProgress(newJob, existing) {
   const oldTargets = new Map(existing.targets.map((target) => [target.id, target]));
   newJob.targets = newJob.targets.map((target) => {
     const old = oldTargets.get(target.id);
-    return old ? { ...target, selected: old.selected, status: old.status, components: old.components, overwrite: old.overwrite || {} } : target;
+    if (!old) return target;
+    const components = Object.fromEntries(COMPONENTS.map((component) => {
+      const fresh = target.components[component];
+      if ([COMPONENT_STATUS.SKIPPED, COMPONENT_STATUS.BLOCKED].includes(fresh.status)) return [component, fresh];
+      return [component, old.components?.[component] || fresh];
+    }));
+    const merged = { ...target, selected: old.selected, status: old.status, components, overwrite: old.overwrite || {} };
+    updateTargetStatus(merged);
+    return merged;
   });
   newJob.logs = existing.logs || [];
   newJob.createdAt = existing.createdAt;
@@ -361,7 +370,7 @@ function markVisibleExistingComponent(target, component, visibleState, pattern) 
 async function startJob() {
   if (!canStart()) return;
   const selectedCount = state.job.targets.filter((target) => target.selected).length;
-  const approved = window.confirm(`Start sequential processing for ${selectedCount} Studio language destinations on video ${state.page.videoId}? Existing components will not be deleted or replaced without explicit confirmation.`);
+  const approved = window.confirm(`Start sequential processing for ${selectedCount} Studio language destinations on video ${state.page.videoId}? Only available, valid assets will be processed. Missing assets and existing components will be skipped.`);
   if (!approved) return;
   state.pauseRequested = false;
   state.stopRequested = false;
@@ -374,7 +383,7 @@ async function startJob() {
 }
 
 async function runQueue(token) {
-  setBusy(true, "Processing the sequential queue…");
+  setBusy(true, "Processing the sequential queue… The display will remain awake while this job is running.");
   try {
     const freshFiles = await currentFiles();
     const parsed = await parseAssetFiles(freshFiles);
@@ -395,7 +404,7 @@ async function runQueue(token) {
       if (!work) break;
       const { target, component } = work;
       const record = records.get(target.sourceLanguage);
-      if (!record?.ready) throw new Error(`Source files for ${target.sourceLanguage} are no longer valid.`);
+      if (!record?.ready) throw new Error(`No valid source assets remain for ${target.sourceLanguage}.`);
       state.job.currentTargetId = target.id;
       target.status = STATUS_TEXT[component];
       setComponentResult(state.job, target.id, component, { status: COMPONENT_STATUS.WORKING, message: null, phase: "preparing" });
@@ -435,7 +444,10 @@ async function runQueue(token) {
 
       if (!state.pauseRequested && !state.stopRequested) {
         const nextWork = nextIncompleteWork(state.job);
-        const pacing = pacingForTransition(work, nextWork, { fastSkip: componentOutcome?.fastSkip === true });
+        const pacing = pacingForTransition(work, nextWork, {
+          fastSkip: componentOutcome?.fastSkip === true,
+          lastMutationAtMs: componentOutcome?.mutationCommittedAtMs
+        });
         if (pacing) {
           const completed = await beginQueueCooldown(token, pacing);
           if (!completed) break;
@@ -470,8 +482,17 @@ async function runQueue(token) {
     }), "error-notification");
     await saveJob(state.job);
   } finally {
+    if (state.job?.status !== JOB_STATUS.RUNNING) await releaseDisplayKeepAwake();
     setBusy(false, state.job.pauseReason || (state.job.status === JOB_STATUS.COMPLETE ? "Queue complete." : "Queue stopped."));
     render();
+  }
+}
+
+async function releaseDisplayKeepAwake() {
+  try {
+    await chrome.runtime.sendMessage({ type: "RELEASE_DISPLAY_KEEP_AWAKE" });
+  } catch {
+    // The service worker also reconciles the wake lock from persisted job state.
   }
 }
 
@@ -491,11 +512,12 @@ async function notifyTelegramAndLog(message, operation, language = null) {
 
 async function beginQueueCooldown(token, pacing) {
   const seconds = Math.ceil(pacing.milliseconds / 1000);
+  const creditedSeconds = Math.floor((pacing.creditedMilliseconds || 0) / 1000);
   const reason = pacing.kind === "after-visible-skip"
     ? `Brief ${seconds}s settle after skipping visible existing work for ${pacing.fromLanguage}.`
     : pacing.kind === "between-languages"
-    ? `Cooling down ${seconds}s before ${pacing.toLanguage}.`
-    : `Cooling down ${seconds}s before ${COMPONENT_LABELS[pacing.nextComponent]} for ${pacing.toLanguage}.`;
+    ? `Cooling down ${seconds}s before ${pacing.toLanguage}.${creditedSeconds ? ` ${creditedSeconds}s already credited while waiting for Studio.` : ""}`
+    : `Cooling down ${seconds}s before ${COMPONENT_LABELS[pacing.nextComponent]} for ${pacing.toLanguage}.${creditedSeconds ? ` ${creditedSeconds}s already credited while waiting for Studio.` : ""}`;
   state.job.cooldown = {
     kind: pacing.kind,
     until: Date.now() + pacing.milliseconds,
@@ -507,7 +529,7 @@ async function beginQueueCooldown(token, pacing) {
   appendJobLog(state.job, {
     operation: "pacing",
     language: pacing.toLanguage,
-    message: reason
+    message: `${reason}${creditedSeconds ? ` Original pacing target: ${Math.ceil(pacing.originalMilliseconds / 1000)}s.` : ""}`
   });
   await saveJob(state.job);
   return waitForQueueCooldown(token, state.job.cooldown);
@@ -715,6 +737,7 @@ async function resetJob() {
   state.studioLabels = null;
   await clearJob();
   await chrome.runtime.sendMessage({ type: "CLEAR_RUNTIME_TARGET" });
+  await releaseDisplayKeepAwake();
   render();
 }
 
@@ -799,10 +822,13 @@ function renderPreflight() {
     ...state.validation.records.flatMap((record) => record.errors.map((entry) => `${record.language}: ${entry.message}`)),
     ...state.mappingErrors.map((entry) => entry.message)
   ];
+  const missing = state.validation.records.flatMap((record) => COMPONENTS
+    .filter((component) => !record.files[component])
+    .map((component) => `${record.language}: No ${component} file; it will be skipped.`));
   const ignored = state.validation.ignored.length;
   ui["preflight-report"].innerHTML = errors.length
     ? `<p class="error"><strong>${errors.length} validation issue${errors.length === 1 ? "" : "s"}</strong></p><ul>${errors.map((error) => `<li>${escapeHtml(error)}</li>`).join("")}</ul>`
-    : `<p class="ok"><strong>All translated source sets pass validation.</strong></p><p>${ignored} unrelated/source file${ignored === 1 ? "" : "s"} ignored. ${state.stabilityConfirmed ? "File sizes and modification times remained unchanged." : "Stability confirmation is still required."}</p>`;
+    : `<p class="ok"><strong>Available translated assets pass validation.</strong></p>${missing.length ? `<p><strong>${missing.length} unavailable component${missing.length === 1 ? "" : "s"} will be skipped:</strong></p><ul>${missing.map((message) => `<li>${escapeHtml(message)}</li>`).join("")}</ul>` : ""}<p>${ignored} unrelated/source file${ignored === 1 ? "" : "s"} ignored. ${state.stabilityConfirmed ? "File sizes and modification times remained unchanged." : "Stability confirmation is still required."}</p>`;
 }
 
 function renderControls() {
@@ -831,7 +857,16 @@ function renderLanguages() {
     const targets = jobTargetsBySource.get(record.language) || expandLanguageTargets([record]).targets.map((target) => ({
       ...target,
       status: record.ready ? LANGUAGE_STATUS.WAITING : LANGUAGE_STATUS.FAILED,
-      components: Object.fromEntries(COMPONENTS.map((component) => [component, { status: record.ready ? COMPONENT_STATUS.WAITING : COMPONENT_STATUS.FAILED, message: null }]))
+      components: Object.fromEntries(COMPONENTS.map((component) => {
+        const componentErrors = record.componentErrors?.[component] || [];
+        const missing = !record.files[component];
+        return [component, {
+          status: missing ? COMPONENT_STATUS.SKIPPED : componentErrors.length ? COMPONENT_STATUS.BLOCKED : record.ready ? COMPONENT_STATUS.WAITING : COMPONENT_STATUS.FAILED,
+          message: missing
+            ? `No ${component} file is available; this component will be skipped.`
+            : componentErrors.map((error) => error.message).join(" ") || null
+        }];
+      }))
     }));
     return targets.map((target, targetIndex) => renderTargetRow(record, target, targetIndex === 0)).join("");
   }).join("");

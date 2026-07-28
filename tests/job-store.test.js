@@ -24,6 +24,20 @@ test("resume selects the first incomplete component, not completed work", () => 
   assert.equal(job.targets[0].components.audio.phase, "waiting");
 });
 
+test("missing components start skipped while available components remain queued", () => {
+  const source = record("French");
+  source.files.subtitle = undefined;
+  source.componentErrors = { metadata: [], subtitle: [], audio: [], thumbnail: [] };
+  const job = createJob({
+    page: { videoId: "video", channelId: "channel", videoTitle: "Title" },
+    folderName: "folder",
+    records: [source],
+    targets: [{ id: "French::French", sourceLanguage: "French", targetLanguage: "French", selected: true }]
+  });
+  assert.equal(job.targets[0].components.subtitle.status, COMPONENT_STATUS.SKIPPED);
+  assert.equal(job.targets[0].components.metadata.status, COMPONENT_STATUS.WAITING);
+});
+
 test("component phases persist independently for resumable UI checkpoints", () => {
   const source = record("French");
   const job = createJob({

@@ -22,10 +22,11 @@ It does not use the YouTube API, OAuth, API keys, private YouTube endpoints, ana
 - Jobs are bound to the YouTube video ID, channel ID, and selected folder name.
 - The extension pauses if the bound tab closes, navigates away, stops responding, changes video/channel, or is signed out.
 - Languages and components run sequentially. There are no parallel YouTube uploads.
-- Queue pacing waits a randomized 10–20 seconds between components and 30–60 seconds between languages. Verified Publish/Update controls receive an additional 1–2 second settling delay before the click.
+- Queue pacing targets a randomized 10–20 seconds between components and 30–60 seconds between languages, measured from the last verified Publish/Update click. Time spent waiting for Studio's explicit completion or processing confirmation is credited toward that target, with a 1–3 second post-confirmation settle retained. Unknown or invalid timing falls back to the full cooldown. Verified Publish/Update controls receive an additional 1–2 second settling delay before the click.
 - Dry Run and each component first inspect the main Translations-table row. Clearly published metadata, subtitles, audio, and localized thumbnails are marked Skipped without opening language details; visible audio Processing is also treated as existing work. These no-click skips use only a 0.5–1.5 second settle.
 - A visible CAPTCHA, sign-in verification, rate-limit, unusual-activity, or similar Studio warning immediately fails the atomic operation and pauses the queue. The extension never attempts to solve or bypass a safeguard.
 - Queue completion and operational errors send one Telegram notification through `http://localhost:9540/api/notifications/telegram`. Notification delivery failures are logged and never change upload results.
+- While a job is actively Running, the extension uses Chrome's `power` permission at the `display` level so the Mac display and system remain awake. It releases that request on Complete, Pause, Stop, Reset, or Error, after which normal macOS display and sleep timers apply again.
 - Existing translated components are never deleted.
 - Existing subtitle and audio tracks are blocked because replacing them can require deletion.
 - Existing metadata or thumbnails require a separate, component-specific overwrite confirmation.
@@ -54,10 +55,11 @@ The only additional host permission is `http://localhost:9540/*`, used exclusive
 
 ## Expected asset folder
 
-Each translated source language must have exactly these files:
+Each translated source language may provide any combination of these assets. Missing assets are shown as unavailable and skipped; at least one valid asset is needed for a language to be processed. Audio may use either the WAV or M4A filename, not both:
 
 ```text
 <Language> - audio.wav
+or <Language> - audio.m4a
 <Language>.srt
 <Language> - Thumbnail.png
 <Language> - metadata.json
@@ -110,6 +112,8 @@ All other source names must match one exact Studio language label unless a suppo
 
 Keep Chrome open, keep the Studio tab available, keep the side panel open during large file transfers, keep the Mac awake, and keep the internet connection active. The Studio tab can remain in a background Chrome window while you use another application.
 
+The extension keeps the display awake only during an active queue. It cannot override a manual Lock Screen, a closed MacBook lid, logout, or an administrator-enforced security policy.
+
 Cooldowns are shown in the side-panel status and activity log. Pause and Stop remain responsive during a cooldown, and an interrupted cooldown is saved with the job. These delays reduce request bursts and give Studio time to settle; they do not guarantee that automated browser interaction is permitted or undetected.
 
 ## Folder permission and persistence
@@ -156,7 +160,7 @@ The extension never uses that hidden input by itself. It requires a visible Thum
 
 Preflight checks include:
 
-- Required four-file basename contract
+- Recognized shared-language filenames for every asset that is present
 - Parseable JSON object
 - Non-empty `language`, `title`, and `description`
 - Optional non-empty `languageCode`
@@ -165,13 +169,13 @@ Preflight checks include:
 - Description at most 5,000 characters
 - No duplicate language/component entries
 - Non-empty UTF-8 SRT with a plausible numbered timing block
-- RIFF/WAVE header and non-empty WAV
+- RIFF/WAVE header for WAV or an ISO BMFF `ftyp` header for M4A
 - PNG signature, minimum dimensions, and approximately 16:9 ratio
 - Stable size and modification metadata
 - Exact/approved Studio language mappings
 - Signed-in `/video/<id>/translations` Studio page with video and channel identity
 
-Excluded invalid languages do not block selected valid languages. Invalid selected languages always block Start.
+Missing components are skipped. An invalid component is blocked without preventing other valid components for that language from running. A selected language with no valid assets cannot start.
 
 ## Resume behavior
 

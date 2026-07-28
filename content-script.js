@@ -339,13 +339,14 @@
     await waitForStableEnabled(update, "enable-metadata-update");
     await settleBeforeStudioCommit();
     click(update);
+    const mutationCommittedAtMs = Date.now();
     await waitFor(() => !languageDialogVisible(dialog), { operation: "verify-metadata-update", timeout: TIMEOUTS.normal });
     await waitFor(() => {
       const row = findRow(language);
       return row && /published/i.test(componentCellState(row, "metadata")) ? row : null;
     }, { operation: "verify-metadata-row", timeout: TIMEOUTS.normal });
     await pause(STUDIO_SETTLE_MS);
-    return { outcome: "complete", message: "Translated title and description updated." };
+    return { outcome: "complete", message: "Translated title and description updated.", mutationCommittedAtMs };
   }
 
   function componentCellState(row, component) {
@@ -575,6 +576,7 @@
       await waitForStableEnabled(publish, "subtitle-publish-stable");
       await settleBeforeStudioCommit();
       click(publish);
+      const mutationCommittedAtMs = Date.now();
       await waitFor(() => {
         const row = findRow(language);
         return row && /published/i.test(componentCellState(row, "subtitle")) ? row : null;
@@ -592,7 +594,7 @@
         });
       }
       await pause(STUDIO_SETTLE_MS);
-      return { outcome: "complete", message: "Subtitle uploaded and published." };
+      return { outcome: "complete", message: "Subtitle uploaded and published.", mutationCommittedAtMs };
     }
 
     if (component === "audio") {
@@ -654,6 +656,7 @@
       reportProgress({ phase: "audio-details-update", message: `${language}: popup Published confirmed; saving the audio with language-details Update…` });
       await settleBeforeStudioCommit();
       click(update);
+      const mutationCommittedAtMs = Date.now();
       await waitFor(() => !languageDialogVisible(details), {
         operation: "verify-audio-language-update",
         timeout: TIMEOUTS.audioUpload
@@ -665,6 +668,7 @@
       await pause(STUDIO_SETTLE_MS);
       return {
         outcome: "complete",
+        mutationCommittedAtMs,
         message: /published/i.test(verified.state)
           ? `Audio uploaded and published by Studio (${verified.state}).`
           : `Audio upload confirmed; Studio is processing it (${verified.state}).`
@@ -691,9 +695,10 @@
       await waitForStableEnabled(update, "thumbnail-update-stable");
       await settleBeforeStudioCommit();
       click(update);
+      const mutationCommittedAtMs = Date.now();
       await waitFor(() => !languageDialogVisible(dialog), { operation: "verify-thumbnail-update", timeout: TIMEOUTS.upload });
       await pause(STUDIO_SETTLE_MS);
-      return { outcome: "complete", message: "Localized thumbnail updated." };
+      return { outcome: "complete", message: "Localized thumbnail updated.", mutationCommittedAtMs };
     }
 
     throw diagnosticError("finalize-upload", "subtitle, audio, or thumbnail", component, false);

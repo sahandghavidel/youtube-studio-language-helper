@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { parseAssetFiles } from "../lib/folder-parser.js";
 import { validateParsedFolder } from "../lib/validation.js";
-import { FakeFile, languageFiles } from "./helpers/fake-file.js";
+import { FakeFile, languageFiles, m4aBytes } from "./helpers/fake-file.js";
 
 test("accepts the current three-field JSON structure", async () => {
   const result = await validateParsedFolder(await parseAssetFiles(languageFiles("French")));
@@ -23,10 +23,20 @@ test("rejects JSON language and filename mismatches", async () => {
   assert.equal(result.records[0].errors.some((error) => error.code === "language-mismatch"), true);
 });
 
-test("rejects a missing companion file", async () => {
+test("accepts a partial asset set and reports the missing component as unavailable", async () => {
   const files = languageFiles("French").filter((file) => !file.name.endsWith(" - audio.wav"));
   const result = await validateParsedFolder(await parseAssetFiles(files));
-  assert.equal(result.records[0].errors.some((error) => error.code === "missing-audio"), true);
+  assert.equal(result.records[0].ready, true);
+  assert.equal(result.records[0].errors.some((error) => error.code === "missing-audio"), false);
+  assert.equal(result.records[0].availableComponents.includes("audio"), false);
+});
+
+test("accepts M4A audio", async () => {
+  const files = languageFiles("French").filter((file) => !file.name.endsWith(" - audio.wav"));
+  files.push(new FakeFile("French - audio.m4a", m4aBytes(), { type: "audio/mp4" }));
+  const result = await validateParsedFolder(await parseAssetFiles(files));
+  assert.equal(result.records[0].ready, true);
+  assert.equal(result.records[0].availableComponents.includes("audio"), true);
 });
 
 test("rejects duplicate language components", async () => {

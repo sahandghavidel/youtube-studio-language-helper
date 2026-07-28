@@ -5,6 +5,7 @@ import { FakeFile, languageFiles } from "./helpers/fake-file.js";
 
 test("classifies every contract filename by shared language basename", () => {
   assert.deepEqual(classifyAssetFilename("German (Germany) - audio.wav"), { component: "audio", suffix: " - audio.wav", language: "German (Germany)" });
+  assert.deepEqual(classifyAssetFilename("German (Germany) - audio.m4a"), { component: "audio", suffix: " - audio.m4a", language: "German (Germany)" });
   assert.deepEqual(classifyAssetFilename("German (Germany).srt"), { component: "subtitle", suffix: ".srt", language: "German (Germany)" });
   assert.deepEqual(classifyAssetFilename("German (Germany) - Thumbnail.png"), { component: "thumbnail", suffix: " - Thumbnail.png", language: "German (Germany)" });
   assert.deepEqual(classifyAssetFilename("German (Germany) - metadata.json"), { component: "metadata", suffix: " - metadata.json", language: "German (Germany)" });

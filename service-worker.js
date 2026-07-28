@@ -6,18 +6,22 @@ const RUNTIME_KEY = "jobRuntime";
 const HEARTBEAT_ALARM = "studio-heartbeat";
 
 chrome.runtime.onInstalled.addListener(async () => {
+  setDisplayKeepAwake(false);
   await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
   await chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: 0.5 });
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   await chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: 0.5 });
+  const job = await loadJob();
+  setDisplayKeepAwake(job?.status === JOB_STATUS.RUNNING);
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message.type !== "string") return false;
 
   if (message.type === "SET_RUNTIME_TARGET") {
+    setDisplayKeepAwake(true);
     chrome.storage.local.set({
       [RUNTIME_KEY]: {
         tabId: message.tabId,
@@ -30,7 +34,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "CLEAR_RUNTIME_TARGET") {
+    setDisplayKeepAwake(false);
     chrome.storage.local.remove(RUNTIME_KEY).then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
+  if (message.type === "RELEASE_DISPLAY_KEEP_AWAKE") {
+    setDisplayKeepAwake(false);
+    sendResponse({ ok: true });
     return true;
   }
 
@@ -65,6 +76,8 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== HEARTBEAT_ALARM) return;
+  const job = await loadJob();
+  setDisplayKeepAwake(job?.status === JOB_STATUS.RUNNING);
   const { [RUNTIME_KEY]: runtime } = await chrome.storage.local.get(RUNTIME_KEY);
   if (!runtime) return;
   try {
@@ -80,6 +93,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 async function pauseActiveJob(reason, operation) {
   const job = await loadJob();
   if (!job || job.status !== JOB_STATUS.RUNNING) return;
+  setDisplayKeepAwake(false);
   job.status = JOB_STATUS.PAUSED;
   job.pauseReason = reason;
   appendJobLog(job, { level: "error", operation, message: reason, retrySafe: true });
@@ -94,4 +108,9 @@ async function pauseActiveJob(reason, operation) {
     retrySafe: true
   });
   await saveJob(job);
+}
+
+function setDisplayKeepAwake(active) {
+  if (active) chrome.power.requestKeepAwake("display");
+  else chrome.power.releaseKeepAwake();
 }
