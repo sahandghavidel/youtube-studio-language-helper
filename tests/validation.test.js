@@ -47,9 +47,32 @@ test("rejects duplicate language components", async () => {
   assert.equal(result.records[0].errors.some((error) => error.code === "duplicate-component"), true);
 });
 
-test("rejects over-limit metadata", async () => {
+test("accepts over-limit metadata and truncates the values sent to YouTube", async () => {
   const result = await validateParsedFolder(await parseAssetFiles(languageFiles("French", { title: "x".repeat(101), description: "y".repeat(5001) })));
-  const codes = result.records[0].errors.map((error) => error.code);
-  assert.equal(codes.includes("title-length"), true);
-  assert.equal(codes.includes("description-length"), true);
+  const record = result.records[0];
+  assert.equal(record.ready, true);
+  assert.equal(record.title, "x".repeat(100));
+  assert.equal(record.description, "y".repeat(5000));
+  assert.deepEqual(record.warnings.map((warning) => warning.code), ["title-truncated", "description-truncated"]);
+  assert.equal(record.componentErrors.metadata.length, 0);
+});
+
+test("leaves metadata exactly at YouTube limits unchanged", async () => {
+  const result = await validateParsedFolder(await parseAssetFiles(languageFiles("French", { title: "x".repeat(100), description: "y".repeat(5000) })));
+  const record = result.records[0];
+  assert.equal(record.title.length, 100);
+  assert.equal(record.description.length, 5000);
+  assert.deepEqual(record.warnings, []);
+});
+
+test("does not leave a split Unicode surrogate when truncating metadata", async () => {
+  const result = await validateParsedFolder(await parseAssetFiles(languageFiles("French", {
+    title: `${"x".repeat(99)}😀ending`,
+    description: `${"y".repeat(4999)}😀ending`
+  })));
+  const record = result.records[0];
+  assert.equal(record.title, "x".repeat(99));
+  assert.equal(record.description, "y".repeat(4999));
+  assert.equal(record.title.includes("�"), false);
+  assert.equal(record.description.includes("�"), false);
 });

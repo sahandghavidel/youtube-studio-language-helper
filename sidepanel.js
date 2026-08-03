@@ -321,7 +321,11 @@ function mergeExistingProgress(newJob, existing) {
     const components = Object.fromEntries(COMPONENTS.map((component) => {
       const fresh = target.components[component];
       if ([COMPONENT_STATUS.SKIPPED, COMPONENT_STATUS.BLOCKED].includes(fresh.status)) return [component, fresh];
-      return [component, old.components?.[component] || fresh];
+      const previous = old.components?.[component];
+      if (previous?.phase === "invalid-source" && fresh.status === COMPONENT_STATUS.WAITING) {
+        return [component, fresh];
+      }
+      return [component, previous || fresh];
     }));
     const merged = { ...target, selected: old.selected, status: old.status, components, overwrite: old.overwrite || {} };
     updateTargetStatus(merged);
@@ -825,10 +829,20 @@ function renderPreflight() {
   const missing = state.validation.records.flatMap((record) => COMPONENTS
     .filter((component) => !record.files[component])
     .map((component) => `${record.language}: No ${component} file; it will be skipped.`));
+  const warnings = state.validation.records.flatMap((record) => (
+    (record.warnings || []).map((entry) => `${record.language}: ${entry.message}`)
+  ));
   const ignored = state.validation.ignored.length;
-  ui["preflight-report"].innerHTML = errors.length
+  const validationSummary = errors.length
     ? `<p class="error"><strong>${errors.length} validation issue${errors.length === 1 ? "" : "s"}</strong></p><ul>${errors.map((error) => `<li>${escapeHtml(error)}</li>`).join("")}</ul>`
-    : `<p class="ok"><strong>Available translated assets pass validation.</strong></p>${missing.length ? `<p><strong>${missing.length} unavailable component${missing.length === 1 ? "" : "s"} will be skipped:</strong></p><ul>${missing.map((message) => `<li>${escapeHtml(message)}</li>`).join("")}</ul>` : ""}<p>${ignored} unrelated/source file${ignored === 1 ? "" : "s"} ignored. ${state.stabilityConfirmed ? "File sizes and modification times remained unchanged." : "Stability confirmation is still required."}</p>`;
+    : `<p class="ok"><strong>Available translated assets pass validation.</strong></p>`;
+  const warningSummary = warnings.length
+    ? `<p><strong>${warnings.length} automatic metadata adjustment${warnings.length === 1 ? "" : "s"}:</strong></p><ul>${warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}</ul>`
+    : "";
+  const missingSummary = missing.length
+    ? `<p><strong>${missing.length} unavailable component${missing.length === 1 ? "" : "s"} will be skipped:</strong></p><ul>${missing.map((message) => `<li>${escapeHtml(message)}</li>`).join("")}</ul>`
+    : "";
+  ui["preflight-report"].innerHTML = `${validationSummary}${warningSummary}${missingSummary}<p>${ignored} unrelated/source file${ignored === 1 ? "" : "s"} ignored. ${state.stabilityConfirmed ? "File sizes and modification times remained unchanged." : "Stability confirmation is still required."}</p>`;
 }
 
 function renderControls() {
