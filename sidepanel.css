@@ -99,3 +99,7 @@ dd { margin: 0; overflow-wrap: anywhere; font-size: 12px; font-weight: 600; }
 .activity-log li { padding: 4px 0; border-bottom: 1px solid #f0f1f2; overflow-wrap: anywhere; }
 .activity-log .error { color: var(--danger); }
 .activity-log .warning { color: var(--warning); }
+
+#watch-scope { margin: 0 0 10px; border: 0; padding: 0; }
+#watch-scope label { display: block; }
+#watch-languages { max-height: 12rem; overflow-y: auto; margin: 6px 0; }

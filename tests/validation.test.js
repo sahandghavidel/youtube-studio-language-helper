@@ -39,11 +39,12 @@ test("accepts M4A audio", async () => {
   assert.equal(result.records[0].availableComponents.includes("audio"), true);
 });
 
-test("rejects duplicate language components", async () => {
+test("blocks a duplicate subtitle while another valid component stays ready", async () => {
   const files = languageFiles("French");
   files.push(new FakeFile("French.srt", "1\n00:00:00,000 --> 00:00:01,000\nDuplicate"));
   const result = await validateParsedFolder(await parseAssetFiles(files));
-  assert.equal(result.records[0].ready, false);
+  assert.equal(result.records[0].ready, true);
+  assert.equal(result.records[0].availableComponents.includes("subtitle"), false);
   assert.equal(result.records[0].errors.some((error) => error.code === "duplicate-component"), true);
 });
 

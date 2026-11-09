@@ -98,6 +98,12 @@ The parser discovers the number of source sets dynamically. It does not assume 4
 
 All other source names must match one exact Studio language label unless a supported future `languageCode` resolves the label.
 
+## Optional folder watch
+
+Open the correct Studio Languages tab and select the exported video folder using **Choose Folder**. Expand **Watch this video folder**, choose **Watch all languages in this folder** or check individual languages under **Watch selected languages**, and choose **Start watching**. Watch all also accepts languages added after watching starts, including when the folder starts empty. Selected-language choices are remembered for the paired folder and Studio video. Metadata-only files can make a language selectable before its subtitle or audio arrives. The panel previews the Studio destinations, including one-to-many mappings, and the confirmation shows the folder, channel, video and destination languages. **Include existing files** also processes eligible files already in the folder. With it unchecked, the initial files form a baseline.
+
+Watch handles translated SRT, WAV and M4A only. Each new file must stay stable across scans for at least five seconds. If both audio formats exist, audio waits unless you explicitly choose which format to use. Watch can finish a subtitle first and pick up audio later. It skips existing Studio work, serializes uploads, and stores watch results separately from the manual job. Keep the panel open while uploading. Closing it suspends scanning. On reopening it checks the remembered folder and paired tab and catches up. Unexpected navigation or permission loss pauses watch; inspect the target and restart watching to resume. Stop watching to return to manual controls.
+
 ## Normal workflow
 
 1. Sign in to the correct channel.

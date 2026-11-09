@@ -1,3 +1,5 @@
+import { initializeWatch } from "./watch-panel.js";
+import { QUEUE_LOCK } from "./lib/watch-folder.js";
 import {
   COMPONENTS,
   COMPONENT_LABELS,
@@ -60,6 +62,7 @@ function escapeHtml(value) {
 async function initialize() {
   wireEvents();
   await Promise.allSettled([restoreDirectory(), refreshStudioPage(), restoreJob()]);
+  await initializeWatch({ state, ui, transfer: transferFile, refreshStudio: refreshStudioPage });
   render();
 }
 
@@ -69,9 +72,9 @@ function wireEvents() {
   ui["directory-fallback"].addEventListener("change", handleFallbackSelection);
   ui["refresh-page"].addEventListener("click", refreshStudioPage);
   ui["dry-run"].addEventListener("click", runDryRun);
-  ui.start.addEventListener("click", startJob);
+  ui.start.addEventListener("click", () => withQueueLock(startJob));
   ui.pause.addEventListener("click", pauseJob);
-  ui.resume.addEventListener("click", resumeJob);
+  ui.resume.addEventListener("click", () => withQueueLock(resumeJob));
   ui.stop.addEventListener("click", stopJob);
   ui.retry.addEventListener("click", retryFailed);
   ui.reset.addEventListener("click", resetJob);
@@ -195,6 +198,7 @@ async function validateFiles(files, stable) {
     state.stabilityConfirmed = false;
   }
   state.stableSnapshot = parsed.snapshot;
+  document.dispatchEvent(new Event("watch-context-changed"));
   state.fallbackCheckedAt = Date.now();
   if (stable) state.stabilityConfirmed = true;
   state.studioLabels = null;
@@ -220,6 +224,7 @@ async function refreshStudioPage() {
     ui["connection-error"].textContent = "";
     ui["connection-error"].classList.add("hidden");
     setConnection("Connected", "success");
+    document.dispatchEvent(new Event("watch-context-changed"));
     render();
     return state.page;
   } catch (error) {
@@ -371,6 +376,13 @@ function markVisibleExistingComponent(target, component, visibleState, pattern) 
   target.components[component].verifiedAt = new Date().toISOString();
 }
 
+async function withQueueLock(run) {
+  await navigator.locks.request(QUEUE_LOCK, { ifAvailable: true }, async lock => {
+    if (lock) await run();
+    else ui["job-message"].textContent = "Another queue is active. Stop it before starting this job.";
+  });
+}
+
 async function startJob() {
   if (!canStart()) return;
   const selectedCount = state.job.targets.filter((target) => target.selected).length;
@@ -383,7 +395,7 @@ async function startJob() {
   state.job.pauseReason = null;
   await saveJob(state.job);
   await chrome.runtime.sendMessage({ type: "SET_RUNTIME_TARGET", tabId: state.tabId, videoId: state.page.videoId, channelId: state.page.channelId });
-  void runQueue(++state.runToken);
+  await runQueue(++state.runToken);
 }
 
 async function runQueue(token) {
@@ -595,9 +607,9 @@ function updateTargetStatus(target) {
   else target.status = LANGUAGE_STATUS.WAITING;
 }
 
-async function transferFile(file, component, language) {
+async function transferFile(file, component, language, watch = null) {
   const transferId = crypto.randomUUID();
-  const port = chrome.tabs.connect(state.tabId, { name: "language-helper-file-transfer" });
+  const port = chrome.tabs.connect(watch?.tabId ?? state.tabId, { name: "language-helper-file-transfer" });
   let closed = false;
   let lastPersistedPhase = null;
   const waiters = [];
@@ -609,6 +621,7 @@ async function transferFile(file, component, language) {
     if (message.transferId !== transferId) return;
     if (message.type === "ack") waiters.shift()?.resolve(message);
     if (message.type === "progress" && message.message) {
+      if (watch) { watch.note(message.message); return; }
       ui["job-message"].textContent = message.message;
       const target = state.job?.targets.find((item) => item.id === state.job.currentTargetId && item.targetLanguage === language);
       const componentState = target?.components?.[component];
@@ -642,14 +655,15 @@ async function transferFile(file, component, language) {
   });
 
   try {
-    await sendAndAck({ type: "start", transferId, component, language, name: file.name, size: file.size, mimeType: file.type, lastModified: file.lastModified });
+    await sendAndAck({ type: "start", watchBinding: watch?.binding, transferId, component, language, name: file.name, size: file.size, mimeType: file.type, lastModified: file.lastModified });
     let index = 0;
     for (let offset = 0; offset < file.size; offset += TRANSFER_CHUNK_BYTES) {
-      if (state.pauseRequested || state.stopRequested) throw new Error("Transfer paused before the file was attached.");
+      if (!watch && (state.pauseRequested || state.stopRequested)) throw new Error("Transfer paused before the file was attached.");
       const bytes = new Uint8Array(await file.slice(offset, Math.min(file.size, offset + TRANSFER_CHUNK_BYTES)).arrayBuffer());
       await sendAndAck({ type: "chunk", transferId, index, data: bytesToBase64(bytes) });
       index += 1;
-      ui["job-message"].textContent = `${language}: transferring ${COMPONENT_LABELS[component]} ${formatBytes(Math.min(file.size, offset + bytes.byteLength))} / ${formatBytes(file.size)}`;
+      const progress = `${language}: transferring ${COMPONENT_LABELS[component]} ${formatBytes(Math.min(file.size, offset + bytes.byteLength))} / ${formatBytes(file.size)}`;
+      if (watch) watch.note(progress); else ui["job-message"].textContent = progress;
     }
     port.postMessage({ type: "end", transferId });
     return await terminal;
@@ -705,7 +719,7 @@ async function resumeJob() {
   state.job.pauseReason = null;
   await saveJob(state.job);
   await chrome.runtime.sendMessage({ type: "SET_RUNTIME_TARGET", tabId: state.tabId, videoId: state.job.videoId, channelId: state.job.channelId });
-  void runQueue(++state.runToken);
+  await runQueue(++state.runToken);
 }
 
 async function stopJob() {

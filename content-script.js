@@ -26,6 +26,14 @@
   const VIDEO_URL = /^https:\/\/studio\.youtube\.com\/video\/([^/?#]+)\/translations(?:[/?#]|$)/;
   const transfers = new Map();
   let pendingUpload = null;
+  let watchBinding = null;
+  async function withWatchBinding(binding, operation) {
+    if (!binding) return operation();
+    assertBinding(binding);
+    watchBinding = binding;
+    try { return await operation(); }
+    finally { watchBinding = null; }
+  }
 
   function visible(element) {
     if (!element || !element.isConnected) return false;
@@ -74,6 +82,7 @@
   }
 
   function click(element) {
+    if (watchBinding) assertBinding(watchBinding);
     element.scrollIntoView({ block: "center", inline: "nearest" });
     element.click();
   }
@@ -556,6 +565,10 @@
     const file = new File([blob], transfer.name, { type: transfer.mimeType || "", lastModified: transfer.lastModified || Date.now() });
     const dataTransfer = new DataTransfer();
     dataTransfer.items.add(file);
+    if (transfer.watchBinding) {
+      assertBinding(transfer.watchBinding);
+      if (!pendingUpload.input.isConnected) throw new Error("Prepared Studio input was detached.");
+    }
     pendingUpload.input.files = dataTransfer.files;
     pendingUpload.input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
     pendingUpload.input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
@@ -766,9 +779,9 @@
           return;
         }
         if (message.type === "end") {
-          const result = await attachPendingFile(transfer, (progress) => {
+          const result = await withWatchBinding(transfer.watchBinding, () => attachPendingFile(transfer, (progress) => {
             port.postMessage({ type: "progress", transferId: transfer.transferId, ...progress });
-          });
+          }));
           transfers.delete(transfer.transferId);
           port.postMessage({ type: "complete", transferId: transfer.transferId, result });
         }
@@ -802,7 +815,7 @@
         return { ok: true, page, rows: inspectRows(), studioLabels };
       }
       if (message.type === "PREPARE_COMPONENT") {
-        const result = await prepareComponent(message);
+        const result = await withWatchBinding(message.watch && message.binding, () => prepareComponent(message));
         return { ok: true, result };
       }
       throw new Error(`Unknown message type: ${message.type}`);
