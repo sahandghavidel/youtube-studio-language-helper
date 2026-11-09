@@ -2,11 +2,15 @@ import { folderLanguages, selectionKey, watchDestinations } from "./lib/watch-se
 import { filesFromDirectoryHandle } from "./lib/folder-parser.js";
 import { expandLanguageTargets } from "./lib/language-mapping.js";
 import { getDirectoryHandle, saveDirectoryHandle, getWatchSelection, saveWatchSelection } from "./lib/directory-store.js";
-import { assertWatchPage, matchFiles, QUEUE_LOCK, scanWatch, WATCH_KEY } from "./lib/watch-folder.js";
+import { alreadyInStudio, assertWatchPage, previewWatch, matchFiles, pauseWatch, QUEUE_LOCK, scanWatch, WATCH_MONITOR_LOCK, WATCH_KEY } from "./lib/watch-folder.js";
 
 export async function initializeWatch({ state, ui, transfer, refreshStudio }) {
+  const panel = await chrome.runtime.sendMessage({ type: "WATCH_PANEL_OPEN" });
+  if (!panel?.ok) throw new Error(panel?.error || "Cannot reach the watch service.");
+  const monitorId = crypto.randomUUID();
   let session = (await chrome.storage.local.get(WATCH_KEY))[WATCH_KEY];
   let handle, observer, timer, busy = false, stopping = false, locked = false;
+  let delivery = (await chrome.storage.local.get("watchTelegramOutbox")).watchTelegramOutbox || {};
   let observations = new Map();
   const save = value => chrome.storage.local.set({ [WATCH_KEY]: value });
   const note = text => { ui["watch-status"].textContent = text; };
@@ -82,14 +86,33 @@ export async function initializeWatch({ state, ui, transfer, refreshStudio }) {
   function render() {
     const active = Boolean(session?.enabled);
     ui["watch-start"].disabled = active || locked;
-    ui["watch-stop"].disabled = !active;
+    ui["watch-inspect"].disabled = active || locked;
+    ui["watch-stop"].disabled = !active || !locked;
     for (const key of ["watch-scope", "watch-existing", "watch-format"]) ui[key].disabled = active;
     for (const selector of [".identity-card", ".controls-card", ".languages-card"]) {
       document.querySelector(selector).inert = active || locked;
     }
-    ui["watch-results"].textContent = Object.values(session?.results || {}).map(item =>
-      `${item.language} · ${item.component} · ${item.outcome}${item.message ? " — " + item.message : ""}`
-    ).join("\n");
+    ui["watch-last-scan"].textContent = session?.lastScanAt
+      ? "Last successful scan: " + new Date(session.lastScanAt).toLocaleString() : "";
+    const alerts = Object.values(session?.issues || {}).map(issue => delivery[issue.id]?.status || "pending");
+    ui["watch-delivery"].textContent = alerts.includes("unconfirmed")
+      ? "Telegram delivery could not be confirmed. Check Telegram and the issue here."
+      : alerts.includes("pending") ? "Telegram alert queued." : "";
+    const list = ui["watch-results"];
+    list.replaceChildren();
+    for (const [key, item] of Object.entries(session?.results || {})) {
+      const line = document.createElement("div");
+      line.textContent = [item.language, item.component, item.file, item.outcome, item.message].filter(Boolean).join(" · ");
+      if (item.outcome === "blocked") {
+        const button = document.createElement("button");
+        button.textContent = "Retry blocked file";
+        button.disabled = !active || !locked || busy || stopping;
+        button.title = "Start watching the paired folder, then retry this file.";
+        button.onclick = () => void scan(key);
+        line.append(" ", button);
+      }
+      list.append(line);
+    }
   }
   const inspect = async () => {
     const reply = await chrome.tabs.sendMessage(session.tabId, { type: "INSPECT_PAGE" });
@@ -108,7 +131,7 @@ export async function initializeWatch({ state, ui, transfer, refreshStudio }) {
     if (currentFile.size !== file.size || currentFile.lastModified !== file.lastModified) throw new Error(`${file.name} changed during validation.`);
     const binding = { videoId: session.videoId, channelId: session.channelId };
     const reply = await chrome.tabs.sendMessage(session.tabId, { type: "PREPARE_COMPONENT", watch: true,
-      binding, targetLanguage: target.targetLanguage, component, payload: { allowOverwrite: false } });
+      binding, targetLanguage: target.targetLanguage, component, payload: { title: target.source.title, description: target.source.description, allowOverwrite: false } });
     if (!reply?.ok) throw new Error(reply?.error?.message || "Studio preparation failed.");
     if (reply.result.outcome !== "upload-ready") return reply.result;
     return transfer(currentFile, component, target.targetLanguage, { tabId: session.tabId, binding, note });
@@ -118,15 +141,19 @@ export async function initializeWatch({ state, ui, transfer, refreshStudio }) {
     observer?.disconnect();
     observer = null;
   }
-  async function scan() {
+  async function scan(retryKey = null) {
     if (!session?.enabled || busy || stopping) return;
     busy = true;
+    render();
     try {
-      const status = await scanWatch(session, { inspect, files: allowedFiles, now: Date.now, save, process }, observations);
-      note(status);
+      const status = await scanWatch(session, { inspect, files: allowedFiles, now: Date.now, save, process }, observations, retryKey);
+      session.lastScanAt = Date.now();
+      if (session.issues) delete session.issues.paused;
+      await save(session);
+      if (!stopping) note(status);
     } catch (error) {
-      session.enabled = false;
-      session.reason = error.message;
+      if (stopping) return;
+      pauseWatch(session, error.message, "Check the paired Studio tab and folder access, then resume in the helper.");
       await save(session);
       note(`Paused: ${error.message}`);
       disconnect();
@@ -139,30 +166,43 @@ export async function initializeWatch({ state, ui, transfer, refreshStudio }) {
     if (locked) return;
     await navigator.locks.request(QUEUE_LOCK, { ifAvailable: true }, async lock => {
       if (!lock) { note("Another queue is open. Stop it before starting watch mode."); return; }
-      locked = true;
-      try {
-        await configure();
-        observations = new Map();
-        stopping = false;
-        render();
-        if ("FileSystemObserver" in globalThis) {
-          try {
-            observer = new FileSystemObserver(() => { void scan(); });
-            await observer.observe(handle);
-          } catch { observer?.disconnect(); observer = null; }
+      return navigator.locks.request(WATCH_MONITOR_LOCK, async () => {
+        locked = true;
+        try {
+          await configure();
+          observations = new Map();
+          stopping = false;
+          session.monitorId = monitorId;
+          await save(session);
+          render();
+          if ("FileSystemObserver" in globalThis) {
+            try {
+              observer = new FileSystemObserver(() => { void scan(); });
+              await observer.observe(handle);
+            } catch { observer?.disconnect(); observer = null; }
+          }
+          timer = setInterval(() => { void scan(); }, 5000);
+          await scan();
+          while (session.enabled || busy) await new Promise(resolve => setTimeout(resolve, 200));
+        } catch (error) {
+          await refreshChoices().catch(error => note(error.message));
+          if (session?.enabled && !session.fullAssetScope && !session.monitorId) {
+    session.enabled = false;
+    session.reason = "Start watching to include translated metadata and thumbnails.";
+    await save(session);
+    note(session.reason);
+  }
+  if (session?.enabled && (!session.monitorId || session.monitorId === monitorId)) {
+            pauseWatch(session, error.message, "Check the Studio tab and folder access, then restart monitoring.");
+            await save(session);
+          }
+          note(error.message);
+        } finally {
+          disconnect();
+          locked = false;
+          render();
         }
-        timer = setInterval(() => { void scan(); }, 5000);
-        await scan();
-        while (session.enabled || busy) await new Promise(resolve => setTimeout(resolve, 200));
-      } catch (error) {
-        await refreshChoices().catch(error => note(error.message));
-  if (session?.enabled) { session.enabled = false; session.reason = error.message; await save(session); }
-        note(error.message);
-      } finally {
-        disconnect();
-        locked = false;
-        render();
-      }
+      });
     });
   }
   async function configure() {
@@ -174,6 +214,7 @@ export async function initializeWatch({ state, ui, transfer, refreshStudio }) {
     await refreshChoices();
     const sources = mode === "all" ? folderLanguages(files) : [...selected].sort();
     if (mode === "selected" && !sources.length) throw new Error("Select at least one language.");
+    session = (await chrome.storage.local.get(WATCH_KEY))[WATCH_KEY];
     const previousHandle = await getDirectoryHandle("watch-directory");
     const same = session?.channelId === page.channelId && session.videoId === page.videoId &&
       previousHandle && await handle.isSameEntry(previousHandle);
@@ -187,19 +228,20 @@ export async function initializeWatch({ state, ui, transfer, refreshStudio }) {
     const include = ui["watch-existing"].checked;
     const unavailable = new Set(errors.map(e => e.targetLanguage));
     const destinations = targets.map(t => t.targetLanguage).filter(name => !unavailable.has(name));
-    if (!confirm(`Watch ${handle.name} for “${page.videoTitle}” (${page.videoId}) on channel ${page.channelId}?\nPublish missing subtitles and audio for: ${destinations.join(", ") || "none currently"}.\n${mode === "all" ? "New languages arriving later are included.\n" : ""}${errors.length ? "Held: " + [...unavailable].join(", ") + "\n" : ""}\n${include ? "Include existing files." : "Watch new arrivals and resume any pending work."}`)) throw new Error("Watch was not started.");
+    if (!confirm(`Watch ${handle.name} for “${page.videoTitle}” (${page.videoId}) on channel ${page.channelId}?\nPublish missing translated titles, descriptions, thumbnails, subtitles, and audio for: ${destinations.join(", ") || "none currently"}.\n${mode === "all" ? "New languages arriving later are included.\n" : ""}${errors.length ? "Held: " + [...unavailable].join(", ") + "\n" : ""}\n${include ? "Include existing files." : "Watch new arrivals and resume any pending work."}`)) throw new Error("Watch was not started.");
     const eligibleNames = matchFiles(files, scope).map(file => file.name);
     const previousEligible = same ? matchFiles(files, session.mode === "all" ? null : session.sources) : [];
-    const previousNames = new Set(previousEligible.map(file => file.name));
+    const previousNames = new Set(previousEligible.filter(file => session.fullAssetScope || /\.(srt|m4a|wav)$/.test(file.name)).map(file => file.name));
     const baseline = same ? [...new Set([...session.baseline, ...eligibleNames.filter(name => !previousNames.has(name))])] : eligibleNames;
-    session = { ...binding, tabId: state.tabId, folder: handle.name, mode, sources, labels, enabled: true,
+    session = { ...binding, fullAssetScope: true, videoTitle: page.videoTitle, monitorId,
+      issues: same ? session.issues || {} : {}, lastScanAt: same ? session.lastScanAt : null, tabId: state.tabId, folder: handle.name, mode, sources, labels, enabled: true,
       format: ui["watch-format"].value,
       baseline: include ? [] : baseline,
       results: same ? session.results : {}, last: same ? session.last : null };
     for (const [key, item] of Object.entries(session.results)) {
       if (item.outcome !== "working") continue;
       const row = dry.rows.find(row => row.language === item.language);
-      if ((item.component === "subtitle" ? /published/i : /published|processing/i).test(row?.[item.component] || "")) continue;
+      if (alreadyInStudio(item.component, row?.[item.component])) continue;
       if (!confirm(`The last ${item.language} ${item.component} upload was interrupted. Have you checked Studio and confirmed it is safe to retry?`)) {
         session.enabled = false;
         throw new Error("Watch paused for review.");
@@ -209,11 +251,37 @@ export async function initializeWatch({ state, ui, transfer, refreshStudio }) {
     await saveDirectoryHandle(handle, "watch-directory");
     await save(session);
   }
+  ui["watch-inspect"].addEventListener("click", async () => {
+    const output = ui["watch-report"];
+    output.hidden = false;
+    output.value = "Checking the paired folder and Studio rows…";
+    await navigator.locks.request(QUEUE_LOCK, { ifAvailable: true }, async lock => {
+      if (!lock) throw new Error("Stop the active queue before previewing.");
+      const page = await refreshStudio();
+      const folder = state.directoryHandle;
+      if (!page?.ok || !folder) throw new Error("Choose the video folder and open its Studio Languages tab.");
+      const files = await filesFromDirectoryHandle(folder);
+      await refreshChoices();
+      const dry = await chrome.tabs.sendMessage(state.tabId, { type: "DRY_RUN", binding: { videoId: page.videoId, channelId: page.channelId } });
+      if (!dry?.ok) throw new Error(dry?.error?.message || "Studio preview unavailable.");
+      const labels = [...new Set([...dry.studioLabels, ...dry.rows.map(row => row.language)])];
+      const priorFolder = await getDirectoryHandle("watch-directory");
+      const same = priorFolder && session?.videoId === page.videoId && session.channelId === page.channelId &&
+        await folder.isSameEntry(priorFolder);
+      const report = await previewWatch(matchFiles(files, mode === "all" ? null : [...selected]),
+        ui["watch-format"].value, labels, dry.rows, same ? session.results : {}, dry.disabledLabels);
+      output.value = [page.videoTitle + " (" + page.videoId + ")", folder.name,
+        "Existing files • " + mode + " languages • " + dry.rows.length + " Studio rows",
+        "Language\tComponent\tFile\tDecision\tReason",
+        ...report.map(row => row.join("\t"))].join("\n");
+    }).catch(error => { output.value = error.message; });
+  });
   ui["watch-start"].addEventListener("click", () => void monitor(configure));
   ui["watch-stop"].addEventListener("click", async () => {
     stopping = true;
     session.enabled = false;
     disconnect();
+    delete session.reason;
     await save(session);
     note(busy ? "Stopping after the current component." : "Watch stopped.");
     render();
@@ -223,7 +291,7 @@ export async function initializeWatch({ state, ui, transfer, refreshStudio }) {
     note(session.reason || "Watch stopped.");
   }
   await refreshChoices().catch(error => note(error.message));
-  if (session?.enabled) {
+  if (session?.enabled && (!session.monitorId || session.monitorId === monitorId)) {
     ui["watch-section"].open = true;
     void monitor(async () => {
       handle = await getDirectoryHandle("watch-directory");
@@ -231,5 +299,16 @@ export async function initializeWatch({ state, ui, transfer, refreshStudio }) {
       await inspect();
     });
   }
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local") return;
+    if (changes.watchTelegramOutbox) {
+      delivery = changes.watchTelegramOutbox.newValue || {};
+      render();
+    }
+    if (!changes[WATCH_KEY] || locked) return;
+    session = changes[WATCH_KEY].newValue;
+    note(session?.reason || (session?.enabled ? "Monitoring in the paired panel." : "Watch stopped."));
+    render();
+  });
   render();
 }

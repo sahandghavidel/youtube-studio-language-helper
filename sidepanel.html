@@ -38,7 +38,7 @@
 
     <details class="card" id="watch-section">
       <summary>Watch this video folder</summary>
-      <p>Automatically publish missing subtitles and audio on the paired Studio tab while this panel is open.</p>
+      <p>Automatically publish missing translated titles, descriptions, thumbnails, subtitles, and audio on the paired Studio tab while this panel is open.</p>
       <fieldset id="watch-scope">
         <legend>Languages to watch</legend>
         <label><input type="radio" name="watch-mode" id="watch-all" checked> Watch all languages in this folder</label>
@@ -51,10 +51,14 @@
       </label>
       <label><input type="checkbox" id="watch-existing"> Include existing files</label>
       <div class="folder-actions">
+        <button id="watch-inspect" type="button" class="secondary">Preview existing files</button>
         <button id="watch-start" type="button" class="primary">Start watching</button>
         <button id="watch-stop" type="button" class="secondary" disabled>Stop watching</button>
       </div>
+      <textarea id="watch-report" aria-label="Existing files preview" rows="7" readonly hidden></textarea>
       <p id="watch-status" class="note" role="status">Off</p>
+      <p id="watch-last-scan" class="note"></p>
+      <p id="watch-delivery" class="note"></p>
       <div id="watch-results" style="white-space:pre-line"></div>
     </details>
 

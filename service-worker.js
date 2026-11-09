@@ -1,3 +1,5 @@
+import { checkWatchOwner, flushWatchAlerts } from "./lib/watch-alerts.js";
+import { WATCH_KEY } from "./lib/watch-folder.js";
 import { JOB_STATUS } from "./lib/constants.js";
 import { appendJobLog, loadJob, saveJob } from "./lib/job-store.js";
 import { buildFailureNotification, sendTelegramNotification } from "./lib/telegram-notifier.js";
@@ -19,6 +21,12 @@ chrome.runtime.onStartup.addListener(async () => {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message.type !== "string") return false;
+
+  if (message.type === "WATCH_PANEL_OPEN" && sender.id === chrome.runtime.id) {
+    checkWatchOwner().then(() => sendResponse({ ok: true }),
+      error => sendResponse({ error: error.message }));
+    return true;
+  }
 
   if (message.type === "SET_RUNTIME_TARGET") {
     setDisplayKeepAwake(true);
@@ -114,3 +122,16 @@ function setDisplayKeepAwake(active) {
   if (active) chrome.power.requestKeepAwake("display");
   else chrome.power.releaseKeepAwake();
 }
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  const change = changes[WATCH_KEY];
+  if (area === "local" && change && JSON.stringify(change.oldValue?.issues) !== JSON.stringify(change.newValue?.issues)) {
+    void flushWatchAlerts(change.newValue);
+  }
+});
+
+chrome.alarms.onAlarm.addListener(async alarm => {
+  if (alarm.name !== HEARTBEAT_ALARM) return;
+  await checkWatchOwner();
+  await flushWatchAlerts();
+});

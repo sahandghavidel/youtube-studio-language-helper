@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YouTube Studio Language Helper",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Safely processes translated assets for one YouTube Studio video using the signed-in Studio tab.",
   "minimum_chrome_version": "120",
   "permissions": [

@@ -261,7 +261,9 @@
     const add = exactOne(buttonsNamed("Add language"), "list-studio-languages", "one Add language button");
     click(add);
     const listbox = await waitFor(() => elementsByRole("listbox")[0], { operation: "open-language-list" });
-    const labels = Array.from(listbox.querySelectorAll('[role="option"]')).map(accessibleName).filter(Boolean);
+    const options = Array.from(listbox.querySelectorAll('[role="option"]'));
+    const labels = options.map(accessibleName).filter(Boolean);
+    const disabledLabels = options.filter(option => option.getAttribute("aria-disabled") === "true" || option.hasAttribute("disabled")).map(accessibleName);
     listbox.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
     const closed = await waitFor(() => !elementsByRole("listbox").length, { operation: "close-language-list", timeout: 1_000 }).then(() => true).catch(() => false);
@@ -269,7 +271,7 @@
       click(add);
       await waitFor(() => !elementsByRole("listbox").length, { operation: "close-language-list", timeout: TIMEOUTS.short });
     }
-    return labels;
+    return { studioLabels: labels, disabledLabels };
   }
 
   async function ensureLanguage(language) {
@@ -541,6 +543,12 @@
     assertBinding(message.binding);
     const summarySkip = visibleSummarySkip(message.targetLanguage, message.component);
     if (summarySkip) return summarySkip;
+    if (message.watch && ["metadata", "thumbnail"].includes(message.component)) {
+      const status = componentCellState(findRow(message.targetLanguage), message.component);
+      if (status && !/^[-–—]$|^add$/i.test(status)) {
+        return { outcome: "blocked", message: "Existing Studio state requires review: " + status };
+      }
+    }
     await ensureLanguage(message.targetLanguage);
     if (message.component === "metadata") return processMetadata(message.targetLanguage, message.payload);
     if (message.component === "subtitle") return prepareSubtitle(message.targetLanguage);
@@ -810,9 +818,9 @@
       if (message.type === "PING") return { ok: true, page: inspectPage() };
       if (message.type === "INSPECT_PAGE") return { ok: true, page: inspectPage(), rows: inspectRows() };
       if (message.type === "DRY_RUN") {
-        const page = assertBinding(message.binding);
-        const studioLabels = await studioLanguageLabels();
-        return { ok: true, page, rows: inspectRows(), studioLabels };
+        assertBinding(message.binding);
+        const languages = await studioLanguageLabels();
+        return { ok: true, page: assertBinding(message.binding), rows: inspectRows(), ...languages };
       }
       if (message.type === "PREPARE_COMPONENT") {
         const result = await withWatchBinding(message.watch && message.binding, () => prepareComponent(message));
