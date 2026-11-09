@@ -1,3 +1,4 @@
+import { copyText, showWorkflow } from "./lib/panel-ui.js";
 import { initializeWatch } from "./watch-panel.js";
 import { QUEUE_LOCK } from "./lib/watch-folder.js";
 import {
@@ -67,6 +68,12 @@ async function initialize() {
 }
 
 function wireEvents() {
+  for (const [button, manual] of [["view-manual", true], ["view-watch", false]]) {
+    ui[button].onclick = () => { showWorkflow(ui, manual); renderControls(); };
+  }
+  document.addEventListener("watch-state-rendered", renderControls);
+  ui["manual-filter"].onchange = renderLanguages;
+  ui.recheck.onclick = () => validateCurrentFolder(true).catch(error => reportLocalError("recheck", error));
   ui["choose-folder"].addEventListener("click", chooseFolder);
   ui["grant-folder"].addEventListener("click", grantFolderAccess);
   ui["directory-fallback"].addEventListener("change", handleFallbackSelection);
@@ -104,6 +111,7 @@ async function chooseFolder() {
       return;
     }
     const handle = await window.showDirectoryPicker({ mode: "read", id: "youtube-language-assets" });
+    state.validation = null;
     state.directoryHandle = handle;
     state.permissionNeeded = false;
     state.fallbackFiles = null;
@@ -124,7 +132,7 @@ async function restoreDirectory() {
     const permission = await handle.queryPermission({ mode: "read" });
     if (permission === "granted") {
       state.permissionNeeded = false;
-      await validateCurrentFolder(false);
+      await validateCurrentFolder(true);
     } else {
       state.permissionNeeded = true;
       ui["grant-folder"].classList.remove("hidden");
@@ -165,7 +173,8 @@ async function handleFallbackSelection(event) {
 }
 
 async function validateCurrentFolder(checkStability) {
-  if (!state.directoryHandle) return;
+  if (!state.directoryHandle || state.busy) return;
+  state.stabilityConfirmed = false;
   setBusy(true, "Reading and validating the selected folder…");
   try {
     const firstFiles = await filesFromDirectoryHandle(state.directoryHandle);
@@ -177,10 +186,11 @@ async function validateCurrentFolder(checkStability) {
       const secondParsed = await parseAssetFiles(secondFiles);
       state.stabilityConfirmed = snapshotsEqual(state.stableSnapshot, secondParsed.snapshot);
       if (state.stabilityConfirmed) {
+        ui["folder-note"].textContent = "Folder access granted. Files are stable.";
         state.stableSnapshot = secondParsed.snapshot;
         await validateFiles(secondFiles, true);
       } else {
-        ui["folder-note"].textContent = "One or more files changed during validation. Wait for exports to finish, then choose the folder again.";
+        ui["folder-note"].textContent = "One or more files changed during validation. Wait for exports to finish, then choose Recheck files.";
       }
     }
   } finally {
@@ -191,7 +201,9 @@ async function validateCurrentFolder(checkStability) {
 
 async function validateFiles(files, stable) {
   const parsed = await parseAssetFiles(files);
+  const deselected = new Set((state.validation?.records || []).filter(record => record.selected === false).map(record => record.language));
   state.validation = await validateParsedFolder(parsed);
+  for (const record of state.validation.records) if (deselected.has(record.language)) record.selected = false;
   if (state.fallbackFiles && state.stableSnapshot && Date.now() - (state.fallbackCheckedAt || 0) >= STABILITY_WINDOW_MS) {
     state.stabilityConfirmed = snapshotsEqual(state.stableSnapshot, parsed.snapshot);
   } else if (!state.directoryHandle) {
@@ -813,10 +825,15 @@ function render() {
 }
 
 function renderIdentity() {
+  ui["header-title"].textContent = state.page?.videoTitle || "Open a Studio Languages page";
   ui["channel-value"].textContent = state.page?.channelName || state.page?.channelId || "—";
   ui["video-title-value"].textContent = state.page?.videoTitle || "—";
   ui["video-id-value"].textContent = state.page?.videoId || "—";
   ui["folder-value"].textContent = state.folderName || "None selected";
+  ui["choose-folder"].classList.toggle("primary", !state.permissionNeeded);
+  ui["choose-folder"].classList.toggle("secondary", state.permissionNeeded);
+  ui["grant-folder"].classList.toggle("primary", state.permissionNeeded);
+  ui["grant-folder"].classList.toggle("secondary", !state.permissionNeeded);
   ui["grant-folder"].classList.toggle("hidden", !state.permissionNeeded);
 }
 
@@ -854,7 +871,7 @@ function renderPreflight() {
     ? `<p><strong>${warnings.length} automatic metadata adjustment${warnings.length === 1 ? "" : "s"}:</strong></p><ul>${warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}</ul>`
     : "";
   const missingSummary = missing.length
-    ? `<p><strong>${missing.length} unavailable component${missing.length === 1 ? "" : "s"} will be skipped:</strong></p><ul>${missing.map((message) => `<li>${escapeHtml(message)}</li>`).join("")}</ul>`
+    ? `<details><summary>${missing.length} optional files unavailable</summary><ul>${missing.map(message => `<li>${escapeHtml(message)}</li>`).join("")}</ul></details>`
     : "";
   ui["preflight-report"].innerHTML = `${validationSummary}${warningSummary}${missingSummary}<p>${ignored} unrelated/source file${ignored === 1 ? "" : "s"} ignored. ${state.stabilityConfirmed ? "File sizes and modification times remained unchanged." : "Stability confirmation is still required."}</p>`;
 }
@@ -868,6 +885,30 @@ function renderControls() {
   ui.stop.disabled = status !== JOB_STATUS.RUNNING || state.stopRequested;
   ui.retry.disabled = !state.job?.targets.some((target) => Object.values(target.components).some((component) => component.status === COMPONENT_STATUS.FAILED));
   ui.reset.disabled = !state.job || status === JOB_STATUS.RUNNING;
+  const running = status === JOB_STATUS.RUNNING;
+  const resumable = status === JOB_STATUS.PAUSED || status === JOB_STATUS.STOPPED;
+  ui["dry-run"].hidden = running;
+  ui["dry-run"].disabled ||= !!state.watchActive;
+  ui.start.hidden = running || resumable || !state.job?.dryRunCompletedAt || status === JOB_STATUS.COMPLETE;
+  ui.pause.hidden = ui.stop.hidden = !running;
+  ui.resume.hidden = !resumable;
+  ui.retry.hidden = ui.retry.disabled;
+  ui["job-options"].hidden = ui.reset.disabled;
+  ui.recheck.disabled = !state.directoryHandle || state.busy || running || state.watchActive;
+  for (const key of ["choose-folder","grant-folder"]) ui[key].disabled = state.busy || running || state.watchActive;
+  ui["select-all"].disabled = ui["select-none"].disabled = !state.validation || running;
+  ui["job-next"].textContent = state.watchActive ? "Stop watching to run a manual queue."
+    : running ? "Manual queue running." : !state.page?.ok ? "Open the video’s Studio Languages page."
+    : !state.validation ? "Choose a video folder." : !state.stabilityConfirmed ? "Check file stability before previewing."
+    : !selectedRecords().length ? "Select a source language." : selectedRecords().some(record => !record.ready) ? "Resolve the selected languages’ validation issues."
+    : resumable ? "Review the saved progress, then resume." : !state.job?.dryRunCompletedAt ? "Preview the selected destinations to enable Start." : "";
+  ui["refresh-page"].disabled = state.busy || running || state.watchActive;
+  if (!state.watchActive) {
+    const manual = !ui["manual-view"].hidden;
+    ui["header-state"].textContent = running ? "Manual queue running"
+      : manual ? "Manual queue · " + (status || "Ready") : state.watchLabel || "Watch off";
+  }
+
 }
 
 function renderLanguages() {
@@ -896,12 +937,22 @@ function renderLanguages() {
         }];
       }))
     }));
-    return targets.map((target, targetIndex) => renderTargetRow(record, target, targetIndex === 0)).join("");
-  }).join("");
+    const filter = ui["manual-filter"].value;
+    const visible = targets.filter(target => {
+      const components = Object.values(target.components);
+      if (filter === "attention") return record.errors.length || components.some(isProblem);
+      if (filter === "remaining") return components.some(item => !["complete","skipped"].includes(item.status));
+      return true;
+    });
+    if (!visible.length) return "";
+    return `<section class="source-group"><h3>${escapeHtml(record.language)}</h3>${visible.map((target, index) => renderTargetRow(record, target, index === 0)).join("")}</section>`;
+  }).join("") || '<p class="empty-state">No matching destinations.</p>';
 }
 
+function isProblem(item) { return ["blocked", "failed"].includes(item.status); }
+
 function renderTargetRow(record, target, showCheckbox) {
-  const messages = [...record.errors.map((error) => error.message), ...Object.entries(target.components || {}).flatMap(([component, result]) => result.message ? [`${COMPONENT_LABELS[component]}: ${result.message}`] : [])];
+  const messages = [...record.errors.map(error => error.message), ...Object.entries(target.components).filter(([, item]) => isProblem(item) && item.message).map(([component,item]) => COMPONENT_LABELS[component] + ": " + item.message)];
   const overwriteButtons = Object.entries(target.components || {}).filter(([component, result]) => (
     result.status === COMPONENT_STATUS.BLOCKED
     && ["metadata", "thumbnail"].includes(component)
@@ -916,10 +967,17 @@ function renderTargetRow(record, target, showCheckbox) {
       </label>
       <span class="language-state">${escapeHtml(target.status || LANGUAGE_STATUS.WAITING)}</span>
     </div>
-    <div class="components">${COMPONENTS.map((component) => `<span class="component ${escapeHtml(target.components?.[component]?.status || COMPONENT_STATUS.WAITING)}" title="${escapeHtml(target.components?.[component]?.message || "")}">${escapeHtml(COMPONENT_LABELS[component])}</span>`).join("")}</div>
+    <div class="components">${COMPONENTS.map((component) => `<span class="component ${escapeHtml(target.components?.[component]?.status || COMPONENT_STATUS.WAITING)}" title="${escapeHtml(target.components?.[component]?.message || "")}">${escapeHtml(COMPONENT_LABELS[component])} · ${escapeHtml(componentLabel(target.components[component]))}</span>`).join("")}</div>
     ${messages.length ? `<p class="row-error">${messages.map(escapeHtml).join(" ")}</p>` : ""}
     ${overwriteButtons}
   </article>`;
+}
+
+function componentLabel(item) {
+  if (/processing/i.test(item.message || "") && ["complete","skipped"].includes(item.status)) return "Processing";
+  if (/published/i.test(item.message || "") && ["complete","skipped"].includes(item.status)) return "Published";
+  if (item.phase === "unavailable" || /^No .* file/i.test(item.message || "")) return "No file";
+  return item.status[0].toUpperCase() + item.status.slice(1);
 }
 
 function renderLogs() {
@@ -931,7 +989,7 @@ function renderLogs() {
 async function copyLog() {
   const logs = state.job?.logs || [];
   const text = logs.map((entry) => `${entry.at} ${entry.level.toUpperCase()} ${entry.language || "-"} ${entry.operation || "activity"}: ${entry.message}`).join("\n");
-  await navigator.clipboard.writeText(text || "No activity yet.");
+  await copyText(ui["copy-log"], text || "No activity yet.");
 }
 
 function reportLocalError(operation, error) {

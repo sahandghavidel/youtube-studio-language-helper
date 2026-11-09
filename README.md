@@ -98,6 +98,10 @@ The parser discovers the number of source sets dynamically. It does not assume 4
 
 All other source names must match one exact Studio language label unless a supported future `languageCode` resolves the label.
 
+## Side panel
+
+**Watch folder** is the default view. **Manual queue** has a separate preflight, destination list, and history. Switching views leaves the current operation running. The header shows the video, current activity, and last watch scan. Each existing-files preview is a dated snapshot grouped into additions, skips, and items needing review. Use **Copy report** for the full snapshot. Watch history records new events and Telegram delivery states as they become available.
+
 ## Optional folder watch
 
 Open the correct Studio Languages tab and select the exported video folder using **Choose Folder**. Expand **Watch this video folder**, choose **Watch all languages in this folder** or check individual languages under **Watch selected languages**, and choose **Start watching**. Watch all also accepts languages added after watching starts, including when the folder starts empty. Selected-language choices are remembered for the paired folder and Studio video. Each available asset can run independently. **Preview existing files** compares the selected languages with the current Studio rows without starting uploads. The panel previews the Studio destinations, including one-to-many mappings, and the confirmation shows the folder, channel, video and destination languages. **Include existing files** also processes eligible files already in the folder. With it unchecked, the initial files form a baseline.
