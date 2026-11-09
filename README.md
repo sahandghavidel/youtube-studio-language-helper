@@ -123,7 +123,7 @@ For a blocked result, fix the cause and click **Retry blocked file** while the p
 
 Keep Chrome open, keep the Studio tab available, keep the side panel open during large file transfers, keep the Mac awake, and keep the internet connection active. The Studio tab can remain in a background Chrome window while you use another application.
 
-The extension keeps the display awake only during an active queue. It cannot override a manual Lock Screen, a closed MacBook lid, logout, or an administrator-enforced security policy.
+The extension keeps the display awake during a running manual queue and throughout a confirmed folder watch, including time spent waiting for files. Stop watching releases it after any current component finishes. Previewing files alone leaves the normal display timer in effect. It cannot override a manual Lock Screen, a closed MacBook lid, logout, or an administrator-enforced security policy.
 
 Cooldowns are shown in the side-panel status and activity log. Pause and Stop remain responsive during a cooldown, and an interrupted cooldown is saved with the job. These delays reduce request bursts and give Studio time to settle; they do not guarantee that automated browser interaction is permitted or undetected.
 

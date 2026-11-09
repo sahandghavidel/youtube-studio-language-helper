@@ -1,22 +1,21 @@
 import { checkWatchOwner, flushWatchAlerts } from "./lib/watch-alerts.js";
-import { WATCH_KEY } from "./lib/watch-folder.js";
+import { WATCH_DISPLAY_LOCK, WATCH_KEY } from "./lib/watch-folder.js";
 import { JOB_STATUS } from "./lib/constants.js";
-import { appendJobLog, loadJob, saveJob } from "./lib/job-store.js";
+import { ACTIVE_JOB_KEY, appendJobLog, loadJob, saveJob } from "./lib/job-store.js";
 import { buildFailureNotification, sendTelegramNotification } from "./lib/telegram-notifier.js";
 
 const RUNTIME_KEY = "jobRuntime";
 const HEARTBEAT_ALARM = "studio-heartbeat";
 
 chrome.runtime.onInstalled.addListener(async () => {
-  setDisplayKeepAwake(false);
+  await syncDisplayPower();
   await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
   await chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: 0.5 });
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   await chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: 0.5 });
-  const job = await loadJob();
-  setDisplayKeepAwake(job?.status === JOB_STATUS.RUNNING);
+  await syncDisplayPower();
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -29,7 +28,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "SET_RUNTIME_TARGET") {
-    setDisplayKeepAwake(true);
     chrome.storage.local.set({
       [RUNTIME_KEY]: {
         tabId: message.tabId,
@@ -37,19 +35,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         channelId: message.channelId,
         lastHeartbeatAt: Date.now()
       }
-    }).then(() => sendResponse({ ok: true }));
+    }).then(syncDisplayPower).then(() => sendResponse({ ok: true }));
     return true;
   }
 
   if (message.type === "CLEAR_RUNTIME_TARGET") {
-    setDisplayKeepAwake(false);
-    chrome.storage.local.remove(RUNTIME_KEY).then(() => sendResponse({ ok: true }));
+    chrome.storage.local.remove(RUNTIME_KEY).then(syncDisplayPower).then(() => sendResponse({ ok: true }));
     return true;
   }
 
-  if (message.type === "RELEASE_DISPLAY_KEEP_AWAKE") {
-    setDisplayKeepAwake(false);
-    sendResponse({ ok: true });
+  if (message.type === "SYNC_DISPLAY_POWER" || message.type === "RELEASE_DISPLAY_KEEP_AWAKE") {
+    syncDisplayPower().then(() => sendResponse({ ok: true }), error => sendResponse({ ok: false, error: error.message }));
     return true;
   }
 
@@ -84,8 +80,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== HEARTBEAT_ALARM) return;
-  const job = await loadJob();
-  setDisplayKeepAwake(job?.status === JOB_STATUS.RUNNING);
+  await syncDisplayPower();
   const { [RUNTIME_KEY]: runtime } = await chrome.storage.local.get(RUNTIME_KEY);
   if (!runtime) return;
   try {
@@ -101,7 +96,6 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 async function pauseActiveJob(reason, operation) {
   const job = await loadJob();
   if (!job || job.status !== JOB_STATUS.RUNNING) return;
-  setDisplayKeepAwake(false);
   job.status = JOB_STATUS.PAUSED;
   job.pauseReason = reason;
   appendJobLog(job, { level: "error", operation, message: reason, retrySafe: true });
@@ -118,12 +112,23 @@ async function pauseActiveJob(reason, operation) {
   await saveJob(job);
 }
 
-function setDisplayKeepAwake(active) {
-  if (active) chrome.power.requestKeepAwake("display");
-  else chrome.power.releaseKeepAwake();
+// Serialize state reads so that an older heartbeat cannot undo a later start or stop.
+let powerUpdate = Promise.resolve();
+function syncDisplayPower() {
+  powerUpdate = powerUpdate.catch(() => {}).then(async () => {
+    const [job, locks] = await Promise.all([loadJob(), navigator.locks.query()]);
+    if (job?.status === JOB_STATUS.RUNNING || locks.held.some(lock => lock.name === WATCH_DISPLAY_LOCK)) {
+      chrome.power.requestKeepAwake("display");
+    } else {
+      chrome.power.releaseKeepAwake();
+    }
+  });
+  return powerUpdate;
 }
 
 chrome.storage.onChanged.addListener((changes, area) => {
+  const job = changes[ACTIVE_JOB_KEY];
+  if (area === "local" && job && job.oldValue?.status !== job.newValue?.status) void syncDisplayPower();
   const change = changes[WATCH_KEY];
   if (area === "local" && change && JSON.stringify(change.oldValue?.issues) !== JSON.stringify(change.newValue?.issues)) {
     void flushWatchAlerts(change.newValue);

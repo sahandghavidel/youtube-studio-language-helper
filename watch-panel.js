@@ -2,7 +2,7 @@ import { folderLanguages, selectionKey, watchDestinations } from "./lib/watch-se
 import { filesFromDirectoryHandle } from "./lib/folder-parser.js";
 import { expandLanguageTargets } from "./lib/language-mapping.js";
 import { getDirectoryHandle, saveDirectoryHandle, getWatchSelection, saveWatchSelection } from "./lib/directory-store.js";
-import { alreadyInStudio, assertWatchPage, previewWatch, matchFiles, pauseWatch, QUEUE_LOCK, scanWatch, WATCH_MONITOR_LOCK, WATCH_KEY } from "./lib/watch-folder.js";
+import { alreadyInStudio, assertWatchPage, previewWatch, matchFiles, pauseWatch, QUEUE_LOCK, scanWatch, WATCH_DISPLAY_LOCK, WATCH_MONITOR_LOCK, WATCH_KEY } from "./lib/watch-folder.js";
 
 export async function initializeWatch({ state, ui, transfer, refreshStudio }) {
   const panel = await chrome.runtime.sendMessage({ type: "WATCH_PANEL_OPEN" });
@@ -170,35 +170,40 @@ export async function initializeWatch({ state, ui, transfer, refreshStudio }) {
         locked = true;
         try {
           await configure();
-          observations = new Map();
-          stopping = false;
-          session.monitorId = monitorId;
-          await save(session);
-          render();
-          if ("FileSystemObserver" in globalThis) {
-            try {
-              observer = new FileSystemObserver(() => { void scan(); });
-              await observer.observe(handle);
-            } catch { observer?.disconnect(); observer = null; }
-          }
-          timer = setInterval(() => { void scan(); }, 5000);
-          await scan();
-          while (session.enabled || busy) await new Promise(resolve => setTimeout(resolve, 200));
+          await navigator.locks.request(WATCH_DISPLAY_LOCK, async () => {
+            const power = await chrome.runtime.sendMessage({ type: "SYNC_DISPLAY_POWER" });
+            if (!power?.ok) throw new Error(power?.error || "Chrome could not keep the display awake.");
+            observations = new Map();
+            stopping = false;
+            session.monitorId = monitorId;
+            await save(session);
+            render();
+            if ("FileSystemObserver" in globalThis) {
+              try {
+                observer = new FileSystemObserver(() => { void scan(); });
+                await observer.observe(handle);
+              } catch { observer?.disconnect(); observer = null; }
+            }
+            timer = setInterval(() => { void scan(); }, 5000);
+            await scan();
+            while (session.enabled || busy) await new Promise(resolve => setTimeout(resolve, 200));
+          });
         } catch (error) {
           await refreshChoices().catch(error => note(error.message));
           if (session?.enabled && !session.fullAssetScope && !session.monitorId) {
-    session.enabled = false;
-    session.reason = "Start watching to include translated metadata and thumbnails.";
-    await save(session);
-    note(session.reason);
-  }
-  if (session?.enabled && (!session.monitorId || session.monitorId === monitorId)) {
+            session.enabled = false;
+            session.reason = "Start watching to include translated metadata and thumbnails.";
+            await save(session);
+            note(session.reason);
+          }
+          if (session?.enabled && (!session.monitorId || session.monitorId === monitorId)) {
             pauseWatch(session, error.message, "Check the Studio tab and folder access, then restart monitoring.");
             await save(session);
           }
           note(error.message);
         } finally {
           disconnect();
+          await chrome.runtime.sendMessage({ type: "SYNC_DISPLAY_POWER" }).catch(() => {});
           locked = false;
           render();
         }
